@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using TT_VoxelTerrain;
 using UnityEngine;
 
 // Original source: http://paulbourke.net/geometry/polygonise/marchingsource.cpp
@@ -10,6 +11,7 @@ public struct CloudPair
 {
     public sbyte Density;
     public byte Terrain;
+    public float DensityFloat => (Density - 0.5f) / 128f;
 
     public CloudPair(sbyte Density, byte Terrain)
     {
@@ -27,8 +29,10 @@ public struct CloudPair
     {
         return new CloudPair((Density - 0.5f) / 128f + Change, this.Density <= 0 ? Terrain : this.Terrain);
     }
-
-    public CloudPair AddDensity(float Change)
+    /// <summary>
+    /// Was AddDensity
+    /// </summary>
+    public CloudPair SubDensity(float Change)
     {
         return new CloudPair((Density - 0.5f) / 128f + Change, Terrain);
     }
@@ -54,6 +58,7 @@ public class MarchingCubes
     public List<Vector3> _vertices = new List<Vector3>();
     public List<Vector2> _uvs = new List<Vector2>();
     public Dictionary<byte, List<int>> _indices = new Dictionary<byte, List<int>>();
+    public Dictionary<Vector3, List<int>> edgeIndices = new Dictionary<Vector3, List<int>>();
     int _currentIndex = 0;
     // outside the function for better performance
     CloudPair[] caCubeValue = new CloudPair[8];
@@ -71,37 +76,58 @@ public class MarchingCubes
     public MarchingCubes()
     {
         sampleProc = (Vector2 p) => { return new ReadPair(DefaultSampleHeight, 127, 128); };
+        edgeIndices.Add(Vector3.up, new List<int>());
+        edgeIndices.Add(Vector3.down, new List<int>());
+        edgeIndices.Add(Vector3.left, new List<int>());
+        edgeIndices.Add(Vector3.right, new List<int>());
+        edgeIndices.Add(Vector3.forward, new List<int>());
+        edgeIndices.Add(Vector3.back, new List<int>());
     }
 
-    public void Reset()
+    public void PartialReset()
     {
-        _vertices.Clear();
+        foreach (var item in _indices)
+        {
+            item.Value.Clear();
+            _listCache.Push(item.Value);
+        }
         _indices.Clear();
-        //_colors.Clear();
         _uvs.Clear();
+    }
+    public void FullReset()
+    {
+        PartialReset();
+        _vertices.Clear();
+        indicesCache.Clear();
+        //_colors.Clear();
         _currentIndex = 0;
+        foreach (var item in edgeIndices)
+        {
+            item.Value.Clear();
+        }
     }
 
-    public Vector3[] GetVertices()
-    {
-        return _vertices.ToArray();
-    }
+    public List<Vector3> GetVertices() => _vertices;
 
-    public int[] GetIndices()
+    public List<int> indicesCache = new List<int>();
+    public List<int> GetIndices()
     {
+        if (indicesCache.Any())
+            return indicesCache;
         int count = 0;
         foreach (var i in _indices)
         {
             count += i.Value.Count;
         }
-        var indices = new int[count];
-        count = 0;
+        indicesCache.Clear();
         foreach (var i in _indices)
         {
-            System.Array.Copy(i.Value.ToArray(), 0, indices, count, i.Value.Count);
-            count += i.Value.Count;
+            for (int j = 0; j < i.Value.Count; j++)
+            {
+                indicesCache.Add(i.Value[j]);
+            }
         }
-        return indices;
+        return indicesCache;
     }
 
     //public Color32[] GetColors()
@@ -109,54 +135,68 @@ public class MarchingCubes
     //    return _colors.ToArray();
     //}
 
-    static Dictionary<Biome, byte> m_biomeMap;
-    static Dictionary<Biome, byte> BiomeMap
+    internal const float heightDefaultOffset = -50;
+    internal const float heightDefault = 100;
+    internal static float heightSize = -200;
+    internal static float heightScale => heightSize / heightDefault;
+    internal static float TileYOffsetDelta => (heightDefaultOffset * heightScale) - heightDefaultOffset;
+
+    static Dictionary<Biome, byte> BiomeMapInvLookup => ManVoxelTerrain.BiomeMapInvLookup;
+    const int CellsInTileIndexer = 129;
+    static float tilePosToTileScaleG => ManWorld.inst.TileSize / (Mathf.Max(1, 2 >> QualitySettingsExtended.ReducedHeightmapDetail) * ManWorld.inst.CellsPerTileEdge);
+    private static float[,] heightsCached = new float[CellsInTileIndexer, CellsInTileIndexer];
+    internal static float[,] GetRealHeights(WorldTile tile)
     {
-        get
-        {
-            if (m_biomeMap == null)
-            {
-                m_biomeMap = new Dictionary<Biome, byte>();
-                byte i = 0;
-                Biome b;
-                while (true)
-                {
-                    b = ManWorld.inst.CurrentBiomeMap.LookupBiome(i);
-                    if (b == null) break;
-                    m_biomeMap.Add(b, i);
-                    i++;
-                }
-            }
-            return m_biomeMap;
-        }
+        float tilePosToTileScale = tilePosToTileScaleG;
+        float height = tile.Terrain.terrainData.size.y;
+        Vector2 delta = tile.WorldOrigin.ToVector2XZ();
+        Terrain terra = tile.Terrain;
+        for (int x = 0; x < CellsInTileIndexer; x++)
+            for (int y = 0; y < CellsInTileIndexer; y++)
+                heightsCached[x, y] = terra.SampleHeight((delta + new Vector2(x * tilePosToTileScale, y * tilePosToTileScale)
+                    ).ToVector3XZ()) / height;
+        return heightsCached;
     }
 
-    public static CloudPair[,,] CreateBufferFromTerrain(WorldTile tile, Vector3 offset, int size, float scale, out int CountBelow, out int CountAbove)
+    /// <summary>
+    /// This SETS the terrain heights INSIDE THE TILE
+    /// </summary>
+    public static void SetBufferFromTerrain(CloudPair[,,] sampleBuffer, float[,] terrainDataFast, WorldTile tile, Vector3 sceneOffset, 
+        int size, float scale, out int CountBelow, out int CountAbove)
     {
         CountBelow = 0; CountAbove = 0;
-        var data = tile.Terrain.terrainData;
+        //TerrainData terrainData = null;
         int sizep1 = size + 1;
         float tileSize = ManWorld.inst.TileSize;
-        CloudPair[,,] sampleBuffer = new CloudPair[sizep1, sizep1, sizep1];
-        for (int i = 0; i < sizep1; i++)
-            for (int k = 0; k < sizep1; k++)
+        int xTileOffset = (int)(sceneOffset.x / scale);
+        int yTileOffset = (int)(sceneOffset.z / scale);
+        float sizeScale = size * scale;
+        float deltaScale = scale * 2f;//1.5f;// 0.75f// - looks cool
+        // So what we do here is that we iterate each voxelable position and then obtain the heights for each,
+        //   filling each voxel entirely that is below our height until we hit the top.
+        for (int xVox = 0; xVox < sizep1; xVox++)
+        {
+            for (int zVox = 0; zVox < sizep1; zVox++)
             {
                 try
                 {
                     byte biomeID = 20;
 
-                    int x = (int)(i + offset.x / scale), z = (int)(k + offset.z / scale);
-                    var proc = data.GetHeight(x/* / 2*/, z/* / 2*/);
-                    int cb = Mathf.FloorToInt((proc - offset.y - scale) / (size * scale));
-                    int ca = Mathf.CeilToInt((proc - offset.y + scale) / (size * scale));
+                    int xTile = xVox + xTileOffset;
+                    int yTile = zVox + yTileOffset;
+                    int xTileInv = (xVox - size) + xTileOffset;
+                    int yTileInv = (zVox - size) + yTileOffset;
+
+                    // The new WorldTiles after the SetPieces update have x and y switched for some reason...
+                    //   the reason for this change absolutely eludes me
+                    //float heightTile = terrainData.GetHeight(xTile * 2, yTile * 2);
+                    float heightTile = terrainDataFast[yTile * 2, xTile * 2] * heightSize;
+                    int cb = Mathf.FloorToInt((heightTile - sceneOffset.y - scale) / sizeScale);
+                    int ca = Mathf.CeilToInt((heightTile - sceneOffset.y + scale) / sizeScale);
                     if (cb < CountBelow)
-                    {
                         CountBelow = cb;
-                    }
                     if (ca > CountAbove)
-                    {
                         CountAbove = ca;
-                    }
                     //if (x % 2 == 1)
                     //{
                     //    proc += data.GetHeight(x / 2 + 1, z / 2);
@@ -179,58 +219,67 @@ public class MarchingCubes
                     //var proc = data.GetInterpolatedHeight((float)i / (size * subCount) + offset.x / tileSize, (float)k / (size * subCount) + offset.z / tileSize);
 
                     //Another point of failiure
+                    int error = 0;
                     try
                     {
-                        if (1 == 0 && TT_VoxelTerrain.Class1.isBiomeInjectorPresent)
-                        { 
-                        
+                        if (1 == 0 && TT_VoxelTerrain.ManVoxelTerrain.isBiomeInjectorPresent)
+                        {
+                            error = 99;
                         }
                         else
                         {
-                            var bc = new ManWorld.CachedBiomeBlendWeights(tile.BiomeMapData.cells[x/* / 2*/+ 1, z/* / 2*/+ 1]);
-
-                            Biome highestB = null;
+                            // The new WorldTiles after the SetPieces update have x and y switched for some reason...
+                            //   the reason for this change absolutely eludes me
+                            var bc = new ManWorld.CachedBiomeBlendWeights(tile.BiomeMapData.cells[xTile, yTile]);
+                            error = 1;
+                            Biome heaviestBiome = null;
                             float h = 0f;
                             for (int m = 0; m < bc.NumWeights; m++)
                             {
                                 Biome biome = bc.Biome(m);
                                 float weight = bc.Weight(m);
+                                error++;
                                 if (biome != null && weight > h)
                                 {
                                     h = weight;
-                                    highestB = biome;
+                                    heaviestBiome = biome;
                                 }
                             }
-                            if (highestB)
+                            error = 2000;
+                            if (heaviestBiome != null)
                             {
-                                biomeID = (byte)(BiomeMap[highestB] * 2);
+                                error = 10000;
+                                biomeID = (byte)(BiomeMapInvLookup[heaviestBiome] * 2);
                             }
+                            error = 13000;
 
-                            for (int j = 0; j < sizep1; j++)
+                            for (int yVox = 0; yVox < sizep1; yVox++)
                             {
-                                var d = proc - j * scale - offset.y;
-                                sampleBuffer[i, j, k] = new CloudPair(d / scale, Mathf.Abs(d) > scale * 1.5f ? (byte)(biomeID + 1) : biomeID);
+                                float d = heightTile - (yVox * scale + sceneOffset.y);
+                                error++;
+                                sampleBuffer[xVox, yVox, zVox] = new CloudPair(d / scale, Mathf.Abs(d) > deltaScale ? (byte)(biomeID + 1) : biomeID);
                             }
+                            error = 14000;
                         }
                     }
                     catch (Exception E)
                     {
-                        Console.WriteLine($"Could not properly handle tile information at {i}, {k}   {E.ToString()}");
+                        //DebugVoxel.Log($"Could not properly handle tile information at [{xVox}, {zVox}], tile coord [{xTile}, {yTile}] " +
+                        //    $" case {error.ToString()} - {E.ToString()}");
                     }
 
                 }
                 catch (Exception E)
                 {
-                    Console.WriteLine($"Critical error on handled tile!  at {i}, {k}   {E.ToString()}");
+                    //DebugVoxel.Log($"Critical error on handled tile!  at {xVox}, {zVox}   {E.ToString()}");
                 }
             }
-        return sampleBuffer;
+        }
     }
 
-    public CloudPair[,,] CreateBuffer(Vector3 origin, int size, float scale)
+    public void SetBuffer(CloudPair[,,] sampleBuffer, Vector3 origin, int size, float scale)
     {
-                int sizep1 = size + 1;
-        CloudPair[,,] sampleBuffer = new CloudPair[sizep1, sizep1, sizep1];
+        int sizep1 = size + 1;
         for (int i = 0; i < sizep1; i++)
             for (int k = 0; k < sizep1; k++)
             {
@@ -242,7 +291,11 @@ public class MarchingCubes
                     sampleBuffer[i, j, k] = new CloudPair(d / scale, Mathf.Abs(d) > scale*1.5f ? proc.AltTerrain : proc.TopTerrain);
                 }
             }
-        return sampleBuffer;
+    }
+    public static CloudPair[,,] CreateNewBuffer(int size)
+    {
+        int sizep1 = size + 1;
+        return new CloudPair[sizep1, sizep1, sizep1];
     }
 
     /// <summary>
@@ -253,9 +306,9 @@ public class MarchingCubes
     /// <param name="scale">Size of each voxel</param>
     /// <param name="_sampleBuffer"></param>
     /// <returns></returns>
-    public void MarchChunk(IntVector3 origin, int size, float scale, CloudPair[,,] sampleBuffer)
+    public void MarchChunk(IntVector3 origin, int size, float scale, float scaleUV, CloudPair[,,] sampleBuffer)
     {
-        Reset();
+        FullReset();
         int flagIndex;
         
         for (int i = 0; i < size; i++)
@@ -346,8 +399,33 @@ public class MarchingCubes
                                 middlePoint = edge1 + (ofst + cofst) * (edge2 - edge1);
 
                                 _vertices.Add(offset + middlePoint);
-                                _uvs.Add(new Vector2(((middlePoint.x / scale) + i + Mathf.Sin((((middlePoint.y / scale) + j) / size) * Mathf.Deg2Rad * 720f)) / size, ((middlePoint.z / scale) + k + Mathf.Cos((((middlePoint.y / scale) + j) / size) * Mathf.Deg2Rad * 720f)) / size));
-                                AddToIndices(currentTerrain, _currentIndex++);
+                                _uvs.Add(new Vector2(
+                                    ((middlePoint.x / scaleUV) + i +
+                                    Mathf.Sin((((middlePoint.y / scaleUV) + j) / size) * Mathf.Deg2Rad * 720f)) / 
+                                    size, 
+                                    ((middlePoint.z / scaleUV) + k + 
+                                    Mathf.Cos((((middlePoint.y / scaleUV) + j) / size) * Mathf.Deg2Rad * 720f)) /
+                                    size
+                                    ));
+                                if (i == 0)
+                                    edgeIndices[Vector3.left].Add(_currentIndex);
+                                else if (i == size - 1)
+                                    edgeIndices[Vector3.right].Add(_currentIndex);
+                                if (j == 0)
+                                    edgeIndices[Vector3.down].Add(_currentIndex);
+                                else if (j == size - 1)
+                                    edgeIndices[Vector3.up].Add(_currentIndex);
+                                if (k == 0)
+                                    edgeIndices[Vector3.back].Add(_currentIndex);
+                                else if (k == size - 1)
+                                    edgeIndices[Vector3.forward].Add(_currentIndex);
+                                /*
+                                if (i == 0)
+                                    AddToIndices(126, _currentIndex++);
+                                else if (k == 0 && i % 2 == 1)
+                                    AddToIndices(127, _currentIndex++);
+                                else // */
+                                    AddToIndices(currentTerrain, _currentIndex++);
                             }
                         }
                     }
@@ -355,11 +433,15 @@ public class MarchingCubes
         //return sampleBuffer;
     }
 
+    private Stack<List<int>> _listCache = new Stack<List<int>>();
     private void AddToIndices(byte Type, int Value)
     {
         if (!_indices.ContainsKey(Type))
         {
-            _indices.Add(Type, new List<int>());
+            if (_listCache.Any())
+                _indices.Add(Type, _listCache.Pop());
+            else
+                _indices.Add(Type, new List<int>());
         }
         _indices[Type].Add(Value);
     }

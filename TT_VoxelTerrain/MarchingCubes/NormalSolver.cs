@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using TT_VoxelTerrain;
 using UnityEngine;
 
 /**
@@ -139,6 +140,8 @@ public static class NormalSolver
 
         return normals;
     }
+
+    
 
     private struct VertexKey
     {
