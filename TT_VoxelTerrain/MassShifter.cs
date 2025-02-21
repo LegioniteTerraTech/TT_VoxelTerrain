@@ -67,7 +67,7 @@ namespace TT_VoxelTerrain
         static Vector3 cachedNormal = Vector3.up;
         static byte BrushMat = 0xFF;
         static int brushSize = Mathf.RoundToInt(VoxTerrain.voxBlockResolution);
-        void Update()
+        internal void Update()
         {
             bool showBrushSize = false;
             bool showBrushMat = false;
