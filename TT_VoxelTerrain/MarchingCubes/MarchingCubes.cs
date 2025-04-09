@@ -161,7 +161,7 @@ public class MarchingCubes
     /// <summary>
     /// This SETS the terrain heights INSIDE THE TILE
     /// </summary>
-    public static void SetBufferFromTerrain(CloudPair[,,] sampleBuffer, float[,] terrainDataFast, WorldTile tile, Vector3 sceneOffset, 
+    public static void SetBufferFromTerrain(CloudPair[,,] sampleBuffer, float[,] terrainDataFast, float[,,] splatMapFast, WorldTile tile, Vector3 sceneOffset, 
         int size, float scale, out int CountBelow, out int CountAbove)
     {
         CountBelow = 0; CountAbove = 0;
@@ -186,11 +186,13 @@ public class MarchingCubes
                     int yTile = zVox + yTileOffset;
                     int xTileInv = (xVox - size) + xTileOffset;
                     int yTileInv = (zVox - size) + yTileOffset;
+                    int xTileType = yTile * 2;
+                    int yTileType = xTile * 2;
 
                     // The new WorldTiles after the SetPieces update have x and y switched for some reason...
                     //   the reason for this change absolutely eludes me
                     //float heightTile = terrainData.GetHeight(xTile * 2, yTile * 2);
-                    float heightTile = terrainDataFast[yTile * 2, xTile * 2] * heightSize;
+                    float heightTile = terrainDataFast[xTileType, yTileType] * heightSize;
                     int cb = Mathf.FloorToInt((heightTile - sceneOffset.y - scale) / sizeScale);
                     int ca = Mathf.CeilToInt((heightTile - sceneOffset.y + scale) / sizeScale);
                     if (cb < CountBelow)
@@ -257,7 +259,15 @@ public class MarchingCubes
                             {
                                 float d = heightTile - (yVox * scale + sceneOffset.y);
                                 error++;
-                                sampleBuffer[xVox, yVox, zVox] = new CloudPair(d / scale, Mathf.Abs(d) > deltaScale ? (byte)(biomeID + 1) : biomeID);
+                                if (splatMapFast == null)
+                                {
+                                    sampleBuffer[xVox, yVox, zVox] = new CloudPair(d / scale, Mathf.Abs(d) > deltaScale ? (byte)(biomeID + 1) : biomeID);
+                                }
+                                else
+                                {
+                                    sampleBuffer[xVox, yVox, zVox] = new CloudPair(d / scale, splatMapFast[xTileType, yTileType, 0] > 0.5f ?
+                                        (byte)(biomeID + 1) : biomeID);
+                                }
                             }
                             error = 14000;
                         }
@@ -277,9 +287,9 @@ public class MarchingCubes
         }
     }
 
-    public void SetBuffer(CloudPair[,,] sampleBuffer, Vector3 origin, int size, float scale)
+    public void SetBuffer(CloudPair[,,] sampleBuffer, Vector3 origin, int sizeCubeAxis, float scale)
     {
-        int sizep1 = size + 1;
+        int sizep1 = sizeCubeAxis + 1;
         for (int i = 0; i < sizep1; i++)
             for (int k = 0; k < sizep1; k++)
             {
@@ -292,9 +302,9 @@ public class MarchingCubes
                 }
             }
     }
-    public static CloudPair[,,] CreateNewBuffer(int size)
+    public static CloudPair[,,] CreateNewBuffer(int sizeCubeAxis)
     {
-        int sizep1 = size + 1;
+        int sizep1 = sizeCubeAxis + 1;
         return new CloudPair[sizep1, sizep1, sizep1];
     }
 
@@ -302,18 +312,18 @@ public class MarchingCubes
     /// 
     /// </summary>
     /// <param name="origin">World space origin position</param>
-    /// <param name="size">Buffer size</param>
+    /// <param name="sizeCubeAxis">Buffer size</param>
     /// <param name="scale">Size of each voxel</param>
     /// <param name="_sampleBuffer"></param>
     /// <returns></returns>
-    public void MarchChunk(IntVector3 origin, int size, float scale, float scaleUV, CloudPair[,,] sampleBuffer)
+    public void MarchChunk(IntVector3 origin, int sizeCubeAxis, float scale, float scaleUV, CloudPair[,,] sampleBuffer)
     {
         FullReset();
         int flagIndex;
         
-        for (int i = 0; i < size; i++)
-            for (int j = 0; j < size; j++)
-                for (int k = 0; k < size; k++)
+        for (int i = 0; i < sizeCubeAxis; i++)
+            for (int j = 0; j < sizeCubeAxis; j++)
+                for (int k = 0; k < sizeCubeAxis; k++)
                 {
                     caCubeValue[0] = sampleBuffer[i, j, k];
                     caCubeValue[1] = sampleBuffer[i + 1, j, k];
@@ -401,23 +411,23 @@ public class MarchingCubes
                                 _vertices.Add(offset + middlePoint);
                                 _uvs.Add(new Vector2(
                                     ((middlePoint.x / scaleUV) + i +
-                                    Mathf.Sin((((middlePoint.y / scaleUV) + j) / size) * Mathf.Deg2Rad * 720f)) / 
-                                    size, 
+                                    Mathf.Sin((((middlePoint.y / scaleUV) + j) / sizeCubeAxis) * Mathf.Deg2Rad * 720f)) / 
+                                    sizeCubeAxis, 
                                     ((middlePoint.z / scaleUV) + k + 
-                                    Mathf.Cos((((middlePoint.y / scaleUV) + j) / size) * Mathf.Deg2Rad * 720f)) /
-                                    size
+                                    Mathf.Cos((((middlePoint.y / scaleUV) + j) / sizeCubeAxis) * Mathf.Deg2Rad * 720f)) /
+                                    sizeCubeAxis
                                     ));
                                 if (i == 0)
                                     edgeIndices[Vector3.left].Add(_currentIndex);
-                                else if (i == size - 1)
+                                else if (i == sizeCubeAxis - 1)
                                     edgeIndices[Vector3.right].Add(_currentIndex);
                                 if (j == 0)
                                     edgeIndices[Vector3.down].Add(_currentIndex);
-                                else if (j == size - 1)
+                                else if (j == sizeCubeAxis - 1)
                                     edgeIndices[Vector3.up].Add(_currentIndex);
                                 if (k == 0)
                                     edgeIndices[Vector3.back].Add(_currentIndex);
-                                else if (k == size - 1)
+                                else if (k == sizeCubeAxis - 1)
                                     edgeIndices[Vector3.forward].Add(_currentIndex);
                                 /*
                                 if (i == 0)

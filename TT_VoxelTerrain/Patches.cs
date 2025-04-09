@@ -15,7 +15,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(WorldTile), "AddVisible")]
         private static class EnforceNotActuallyScenery
         {
-            private static bool Prefix(Visible visible)
+            internal static bool Prefix(Visible visible)
             {
                 return !visible.GetComponent<VoxTerrain>();
             }
@@ -24,7 +24,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(ManSaveGame.StoredTile), "SetSceneryAwake")]
         private static class NoResdispBecauseNotActuallyScenery
         {
-            private static bool Prefix(Dictionary<int, Visible>[] visibles, bool awake)
+            internal static bool Prefix(Dictionary<int, Visible>[] visibles, bool awake)
             {
                 foreach (Visible visible in visibles[3].Values)
                 {
@@ -39,7 +39,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(Visible), "OnPool")]
         private static class VisibleIsBeingStubborn
         {
-            private static void Prefix(ref Visible __instance)
+            internal static void Prefix(ref Visible __instance)
             {
                 if (__instance.GetComponent<VoxTerrain>())
                 {
@@ -51,7 +51,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(Visible), "MoveAboveGround")]
         private static class DenySurfTeleports
         {
-            private static void Prefix(ref Visible __instance)
+            internal static void Prefix(ref Visible __instance)
             {
                 if (__instance.type == ObjectTypes.Vehicle)
                 {
@@ -66,7 +66,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(ManDamage), "DamageableType")]
         private static class ForceAddTerrainType
         {
-            private static void Prefix(ref ManDamage.DamageableType __instance)
+            internal static void Prefix(ref ManDamage.DamageableType __instance)
             {
                 //if (__instance.name == "VoxTerrainChunk")
                 //{
@@ -79,7 +79,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(Visible), "OnSpawn")]
         private static class VisibleIsBeingReallyStubborn
         {
-            private static void Prefix(ref Visible __instance)
+            internal static void Prefix(ref Visible __instance)
             {
                 if (__instance.GetComponent<VoxTerrain>())
                 {
@@ -91,7 +91,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(TileManager), "SetTileCache")]
         private static class PleaseStopRemovingMyChunks
         {
-            private static bool Prefix(Visible visible, WorldTile newTile, ref bool __result)
+            internal static bool Prefix(Visible visible, WorldTile newTile, ref bool __result)
             {
                 __result = false;
                 if (visible.GetComponent<VoxTerrain>() && newTile != null)
@@ -104,14 +104,20 @@ namespace TT_VoxelTerrain
             }
         }
 
+        /// <summary>
+        /// Will need to change this so that it no longer crashes on startup!
+        /// </summary>
         [HarmonyPatch(typeof(ManSaveGame.StoredTile), "StoreScenery")]
         private static class PleaseSaveMyChunks
         {
-            private static void Postfix(ref ManSaveGame.StoredTile __instance, Dictionary<int, Visible>[] visibles)
+            internal static void Postfix(ref ManSaveGame.StoredTile __instance, Dictionary<int, Visible>[] visibles)
             {
+                if (!ManVoxelTerrain.IsEnabled)
+                    return;
                 ManSaveGame.Storing = true;
                 int i = 0;
-                foreach (VoxTerrain vox in Singleton.Manager<ManWorld>.inst.TileManager.LookupTile(__instance.coord, false).StaticParent.GetComponentsInChildren<VoxTerrain>(true))//Visible visible in visibles[(int)TerrainGenerator.ObjectTypeVoxelChunk].Values)
+                foreach (VoxTerrain vox in Singleton.Manager<ManWorld>.inst.TileManager.LookupTile(__instance.coord, false).
+                    StaticParent.GetComponentsInChildren<VoxTerrain>(true))//Visible visible in visibles[(int)TerrainGenerator.ObjectTypeVoxelChunk].Values)
                 {
                     Visible visible = vox.GetComponent<Visible>();
                     //if (visible.name == "VoxTerrainChunk")
@@ -136,7 +142,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(ManSaveGame.StoredTile), "RestoreVisibles")]
         private static class PleaseLoadMyChunks
         {
-            private static void Prefix(ManSaveGame.StoredTile __instance)
+            internal static void Prefix(ManSaveGame.StoredTile __instance)
             {
                 if (__instance.m_StoredVisibles.TryGetValue(-8, out List<ManSaveGame.StoredVisible> voxlist))
                 {
@@ -160,7 +166,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(ManSaveGame), "CreateStoredVisible")]
         private static class SaveVoxChunks
         {
-            private static bool Prefix(ref ManSaveGame.StoredVisible __result, Visible visible)
+            internal static bool Prefix(ref ManSaveGame.StoredVisible __result, Visible visible)
             {
                 if (visible.GetComponent<VoxTerrain>())
                 {
@@ -177,17 +183,53 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(Visible), "get_rbody")]
         private static class SupressPhysics
         {
-            private static bool Prefix(Visible __instance)
+            internal static bool Prefix(Visible __instance)
             {
                 return !__instance.GetComponent<VoxTerrain>();
             }
         }
 
+        // Already accounted for in "ReplaceHeightGet"
+        /*
+        [HarmonyPatch(typeof(ManWorld), "TryProjectToGround",
+            new Type[] { typeof(Vector3), typeof(Vector3), typeof(bool) },
+            new ArgumentType[] { ArgumentType.Ref, ArgumentType.Out, ArgumentType.Normal })]
+        [HarmonyPriority(9001)]
+        private static class ReplaceHeightGetWorld
+        {   //Will have to retrofit this to operate with scenery in mind
+            internal static bool Prefix(ref float __result, ref Vector3 scenePos, ref Vector3 outNormal, out bool onTile, ref bool hitScenery)
+            {
+                onTile = true;
+                int layerMask = Globals.inst.layerTerrain.mask;//VoxTerrain.VoxelTerrainOnlyLayer
+                //int layerMask = hitScenery ? (Globals.inst.layerScenery.mask | Globals.inst.layerTerrain.mask) : (int)TerrainGenerator.TerrainOnlyLayer;
+                if (Physics.Raycast(scenePos, Vector3.down, out RaycastHit raycasthit, 8192, layerMask, QueryTriggerInteraction.Ignore)
+                {
+                    __result = scenePos.y - raycasthit.distance;
+                    outNormal = raycasthit.normal;
+                    return false;
+                }
+                if (Physics.Raycast(scenePos + Vector3.up * VoxTerrain.voxBlockResolution, Vector3.down, out raycasthit, 8192, layerMask, QueryTriggerInteraction.Ignore)
+                {
+                    __result = scenePos.y + VoxTerrain.voxBlockResolution - raycasthit.distance;
+                    outNormal = raycasthit.normal;
+                    return false;
+                }
+                if (Physics.Raycast(scenePos + Vector3.up * 4096 + Vector3.one * 0.001f, Vector3.down, out raycasthit, 8192, layerMask, QueryTriggerInteraction.Ignore)
+                {
+                    __result = scenePos.y + 4096.001f - raycasthit.distance;
+                    outNormal = raycasthit.normal;
+                    return false;
+                }
+                return true;
+            }
+        }
+        */
+
         [HarmonyPatch(typeof(TileManager), "GetTerrainHeightAtPosition")]
         [HarmonyPriority(9001)]
         private static class ReplaceHeightGet
         {   //Will have to retrofit this to operate with scenery in mind
-            private static bool Prefix(ref float __result, ref Vector3 scenePos, out bool onTile, ref bool forceCalculate)
+            internal static bool Prefix(ref float __result, ref Vector3 scenePos, out bool onTile, ref bool forceCalculate)
             {
                 onTile = true;
                 //DebugVoxel.Assert("Heigg=htget");
@@ -216,7 +258,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(TankCamera), "GroundProjectAllowingForGameMode")]
         private static class ReplaceTankCameraGroundProject//Function missing!
         {
-            private static bool Prefix(ref Vector3 __result, Vector3 position)
+            internal static bool Prefix(ref Vector3 __result, Vector3 position)
             {
                 __result = Singleton.Manager<ManWorld>.inst.ProjectToGround(position, false) + Vector3.down * 10000;
                 return false;
@@ -227,7 +269,7 @@ namespace TT_VoxelTerrain
         [HarmonyPatch(typeof(Tank), "HandleCollision")]
         private static class TerrainCollisionBypassPatch
         {
-            private static void Prefix(Tank __instance, Collision collisionData, bool stay, ref Visible __state)
+            internal static void Prefix(Tank __instance, Collision collisionData, bool stay, ref Visible __state)
             {
                 var go = collisionData.GetContact(0).thisCollider;
                 if (go.transform.parent.GetComponent<VoxTerrain>())
@@ -243,7 +285,7 @@ namespace TT_VoxelTerrain
                 }
                 __state = null;
             }
-            private static void Postfix(ref Visible __state)
+            internal static void Postfix(ref Visible __state)
             {
                 if (__state)
                 {

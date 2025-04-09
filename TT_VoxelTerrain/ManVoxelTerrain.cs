@@ -6,16 +6,37 @@ using HarmonyLib;
 using UnityEngine;
 using System.Reflection;
 using UnityEngine.Networking;
+using SafeSaves;
 
 namespace TT_VoxelTerrain
 {
+    /// <summary>
+    /// Stores data for voxels in here
+    /// </summary>
+    public class VoxelSerial
+    { 
+    }
+    [AutoSaveManager]
     public class ManVoxelTerrain : MonoBehaviour
     {
+        public const int TextureMixLayers = 2;//4; - OG was 2
+
+
+        [SSManagerInst]
         public static ManVoxelTerrain inst;
+        [SSaveField]
+        public Dictionary<IntVector2, VoxelSerial> VoxelsByTile;
 
         //Globals
         internal static float MaxTechImpactRadius = 32f;
         internal static float resDispTerrainDeltaDmgMulti = 240f;
+        /// <summary>
+        /// Disabled state doesn't work properly yet!
+        /// </summary>
+        public static bool IsEnabled = true;
+
+        public static bool AllowPlayerDamageTerraform = true;
+        public static bool AllowEnemyDamageTerraform = true;
 
 
         //Detection variables
@@ -26,6 +47,10 @@ namespace TT_VoxelTerrain
         const TTMsgType VoxBrushMsg = (TTMsgType)4326;
         private static Harmony harmonyInst = new Harmony("aceba1.betterterrain");
         internal static VoxelState state = VoxelState.Preparing;
+        /// <summary>
+        /// Size of each voxel
+        /// - AUTO-SET in Setup()
+        /// </summary>
         internal static int VoxelRez = 8;
         internal static int PreQueuedCloudPairs = 32;
         internal static bool IsRemoving = false;
@@ -83,10 +108,11 @@ namespace TT_VoxelTerrain
             catch { }
         }
 
+        public const byte fallbackID = 127;
         public static void AddMoreTypes()
         {
             Texture2D tex = new Texture2D(0, 0);
-            Material result = new Material(VoxTerrain.sharedMaterial);
+            Material result = new Material(VoxTerrain.sharedMaterialDefault);
             tex.LoadRawTextureData(Properties.Resources.neontile_png);
             tex.Apply();
             result.mainTexture = tex;
@@ -101,7 +127,7 @@ namespace TT_VoxelTerrain
                 frictionCombine = PhysicMaterialCombine.Maximum,
             });
 
-            result = new Material(VoxTerrain.sharedMaterial);
+            result = new Material(VoxTerrain.sharedMaterialDefault);
             //result.SetTexture("_MainTex",  BiomeTextures["TERRAIN_EXP_01"]);
             //result.SetTexture("_MainTex", Resources.Load<Texture2D>("Textures/EnvironmentTextures/Terrain/TERRAIN_EXP_01.png"));
             tex.LoadRawTextureData(Properties.Resources.neontile_png);
@@ -118,7 +144,7 @@ namespace TT_VoxelTerrain
                 frictionCombine = PhysicMaterialCombine.Maximum,
             });
 
-            result = new Material(VoxTerrain.sharedMaterial);
+            result = new Material(VoxTerrain.sharedMaterialDefault);
             ////result.SetTexture("_MainTex", BiomeTextures["TERRAIN_EXP_01"]);
             //var bmp = new Texture2D(result.mainTexture.width, result.mainTexture.height);
             //for (int y = 0; y < result.mainTexture.width; y++)
@@ -152,12 +178,13 @@ namespace TT_VoxelTerrain
         {
             inst = new GameObject("ManVoxelTerrain").AddComponent<ManVoxelTerrain>();
             VoxTerrain.Setup();
-            VoxelRez = Mathf.RoundToInt(VoxTerrain.voxBlockSize * VoxTerrain.voxBlockResolution * VoxGenerator.subCount);
+            VoxelRez = Mathf.RoundToInt(VoxTerrain.voxBlockSize * VoxTerrain.voxBlockResolution * VoxTerrain.voxChunksPerTile);
 
             if (ManWorld.inst.TileSize != VoxelRez)
-                throw new InvalidOperationException("Voxel Tile is not equal to Default tile horizontal resolution [" + ManWorld.inst.TileSize + "],[" + VoxelRez + "]");
+                throw new InvalidOperationException("Voxel Tile is not equal to Default tile horizontal resolution [" + ManWorld.inst.TileSize + 
+                    "],[" + VoxelRez + "].  In order for the voxel terrain to be flush, they must match!");
 
-            _ = VoxTerrain.sharedMaterial;
+            _ = VoxTerrain.sharedMaterialDefault;
             AddMoreTypes();
 
             /*
@@ -204,6 +231,8 @@ namespace TT_VoxelTerrain
 
         public static void AddVoxTile(WorldTile tile)
         {
+            if (!IsEnabled)
+                return;
             var voxGen = tile.Terrain.gameObject.GetComponent<VoxGenerator>();
             if (!voxGen)
                 voxGen = tile.Terrain.gameObject.AddComponent<VoxGenerator>();
@@ -212,6 +241,8 @@ namespace TT_VoxelTerrain
         }
         public static void RemoveVoxTile(WorldTile tile)
         {
+            if (!IsEnabled)
+                return;
             IsRemoving = true;
             foreach (var item in tile.StaticParent.GetComponentsInChildren<VoxTerrain>(true))
             {
@@ -223,41 +254,45 @@ namespace TT_VoxelTerrain
         }
 
         public static float nextTime = 0;
+        internal static HashSet<WorldPosition> VoxAltered = new HashSet<WorldPosition>();
         public void FixedUpdate()
         {
             if (nextTime < Time.time)
             {
                 nextTime = Time.time + 0.2f;
             }
-            foreach (var item in resDispThisFrame)
+            foreach (var item in VoxAltered)
             {
-                Visible vis = item.visible;
-                Vector3 centerPos = item.transform.position;
-                if (CheckTerrainExistsFast(centerPos, out float height))
-                {   // In range => Move!
-                    if (vis.damageable)
-                    {
-                        float Delta = Mathf.Abs(height - centerPos.y);
-                        if (Delta > 0.1f)
+                foreach (var item2 in VoxGenerator.IterateNearbyScenery(item.ScenePosition))
+                {
+                    Visible vis = item2.visible;
+                    Vector3 centerPos = item2.transform.position;
+                    if (CheckTerrainExistsFast(centerPos, out float height))
+                    {   // In range => Move!
+                        if (vis.damageable)
                         {
-                            ManDamage.inst.DealImpactDamage(vis.damageable,
-                                Delta * resDispTerrainDeltaDmgMulti,
-                                null, null, centerPos + Vector3.down);
+                            float Delta = Mathf.Abs(height - centerPos.y);
+                            if (Delta > 0.1f)
+                            {
+                                ManDamage.inst.DealImpactDamage(vis.damageable,
+                                    Delta * resDispTerrainDeltaDmgMulti,
+                                    null, null, centerPos + Vector3.down);
+                            }
                         }
+                        if (item != null) // Drop the ResourceDispenser down by the mined distance!
+                            vis.centrePosition = vis.centrePosition.SetY(height);
                     }
-                    if (item != null)
-                        vis.centrePosition = vis.centrePosition.SetY(height);
-                }
-                else
-                {   // No Terrain => uhh ignore
-                    /* // Originally was remove
-                    item.RemoveFromWorld(true);
-                    if (item != null)
-                        vis.centrePosition = vis.centrePosition.SetY(height);
-                    */
+                    else
+                    {   // No Terrain => uhh ignore
+                        /* // Originally was remove
+                        item.RemoveFromWorld(true);
+                        if (item != null)
+                            vis.centrePosition = vis.centrePosition.SetY(height);
+                        */
+                    }
                 }
             }
-            resDispThisFrame.Clear();
+            VoxAltered.Clear();
         }
         /*
         public void LateUpdate()
@@ -303,7 +338,6 @@ namespace TT_VoxelTerrain
 
         // Utilities
         public const float maxTerrainDetectDelta = 256f;
-        internal static HashSet<ResourceDispenser> resDispThisFrame = new HashSet<ResourceDispenser>();
         public static bool CheckTerrainExistsFast(Vector3 scenePos, out float height)
         {
             if (Physics.Raycast(scenePos, Vector3.down, out RaycastHit raycasthit, maxTerrainDetectDelta,

@@ -8,8 +8,18 @@ using System.Collections;
 using Nuterra;
 using System.IO;
 using TT_VoxelTerrain;
+using FMOD;
 public class VoxGenerator : MonoBehaviour
 {
+    /// <summary>
+    /// Note: -1000 is the default limit 
+    /// </summary>
+    public static float VisibleMinPermittedHeight => Globals.inst.m_VisibleEmergencyKillHeight;
+    /// <summary>
+    /// Note: 100000 is the default limit 
+    /// </summary>
+    public static float VisibleMaxPermittedHeight => Globals.inst.m_VisibleEmergencyKillMaxHeight;
+
     //internal static List<VoxTerrain> ListOfAllActiveChunks = new List<VoxTerrain>();
 
     public const ObjectTypes ObjectTypeVoxelChunk = ObjectTypes.Scenery; 
@@ -18,14 +28,10 @@ public class VoxGenerator : MonoBehaviour
     internal static VoxTerrain Prefab;
     public WorldTile worldTile;
 
-    /// <summary>
-    /// Number of chunks to break the terrain in to
-    /// </summary>
-    internal const int subCount = 4;
-    internal const int PrefabPoolSize = 64;//8;
+    internal const int VoxTerrainPoolSize = 512;//64;//8;
 
 
-    void LateUpdate()
+    internal void LateUpdate()
     {
         //if (Dirty && worldTile.m_LoadStep >= WorldTile.LoadStep.PopulatingScenery)
         if (worldTile.m_LoadStep >= WorldTile.LoadStep.Populated)
@@ -38,7 +44,7 @@ public class VoxGenerator : MonoBehaviour
     /// <summary>
     /// This CREATES the one terrain TILE
     /// </summary>
-    void GenerateTerrain()
+    private void GenerateTerrain()
     {
         try
         {
@@ -52,9 +58,9 @@ public class VoxGenerator : MonoBehaviour
             int size = Mathf.RoundToInt(VoxTerrain.voxChunkSize / VoxTerrain.voxBlockResolution);
             float terrainHeight = worldTile.Terrain.transform.position.y;
 
-            for (int z = 0; z < subCount; z++)
+            for (int z = 0; z < VoxTerrain.voxChunksPerTile; z++)
             {
-                for (int x = 0; x < subCount; x++)
+                for (int x = 0; x < VoxTerrain.voxChunksPerTile; x++)
                 {
                     float chWorld;
                     int centerHeight;
@@ -102,9 +108,9 @@ public class VoxGenerator : MonoBehaviour
                     //}
                 }
             }
+            //PlaceBedrockLayer();
+            // We are done! No longer need to update this so we shut it off
             enabled = false;
-            //Destroy(this);
-            //_terrain.enabled = false;
         }
         catch (Exception e)
         {
@@ -272,37 +278,49 @@ public class VoxGenerator : MonoBehaviour
 
         var go = new GameObject("VoxTerrainChunk");
 
+        string visTag = "_V";
 
         //go.AddComponent<ChunkBounds>();
         go.layer = Globals.inst.layerTerrain;
-        go.tag = "_V";
+        go.tag = visTag;
 
+        /*
         var bc = go.AddComponent<BoxCollider>();
         bc.size = Vector3.one * VoxTerrain.voxChunkSize;
         bc.center = Vector3.one * (VoxTerrain.voxChunkSize / 2);
         bc.isTrigger = true;
+        bc.tag = visTag;
+        */
 
         var cgo = new GameObject("Terrain");
         cgo.layer = Globals.inst.layerTerrain;
         cgo.transform.parent = go.transform;
         cgo.transform.localPosition = Vector3.zero;
+        cgo.transform.localRotation = Quaternion.identity;
+        cgo.transform.localScale = Vector3.one;
+        cgo.tag = visTag;
 
         var mf = cgo.AddComponent<MeshFilter>();
+        mf.tag = visTag;
 
         var mr = cgo.AddComponent<MeshRenderer>();
-        mr.sharedMaterial = VoxTerrain.sharedMaterial;
+        mr.tag = visTag;
+        //mr.sharedMaterial = VoxTerrain.sharedMaterialDefault;
+        mr.sharedMaterial = VoxTerrain.mainTerrainMaterial;
 
         var mc = cgo.AddComponent<MeshCollider>();
         mc.convex = false;
         mc.sharedMaterial = new PhysicMaterial();
+        mc.tag = visTag;
 
         //This is likely the terrain adding tool arm
         //var voxdisp = go.AddComponent<VoxDispenser>();
 
         //Future component much like Astroneer's vehicle paver
-        //var voxdisp = go.AddComponent<VoxLeveler>();
+        //var voxlev = go.AddComponent<VoxLeveler>();
 
         var vox = go.AddComponent<VoxTerrain>();
+        vox.tag = visTag;
 
         //This is what determines the MaxHealth the Terrain Has
         var d = go.AddComponent<Damageable>();
@@ -311,17 +329,72 @@ public class VoxGenerator : MonoBehaviour
         //changed from 1000 to make it far less paper-y, this is the freaking floor after all
         d.InitHealth(7500);
         d.m_DamageableType = ManDamage.DamageableType.Rock;//Make it hard to destroy
+        d.tag = visTag;
 
         var v = go.AddComponent<Visible>();
         v.m_ItemType = new ItemTypeInfo(ObjectTypeVoxelChunk, 0);
-        v.tag = "_V";
+        v.tag = visTag;
 
-        go.layer = Globals.inst.layerTerrain;
-        vox.CreatePool(PrefabPoolSize);
+        vox.CreatePool(VoxTerrainPoolSize);
         go.SetActive(false);
 
         //TO-DO: Add the bedrock layer so people don't end up in the void.
         return vox;
     }
 
+
+    private static Transform bedrockLevel = null;
+    /// <summary>
+    /// This is determined by the "killHeight"
+    /// </summary>
+    private static void PlaceBedrockLayer()
+    { 
+        if (bedrockLevel == null)
+            GenerateBedrockLayerPrefab();
+    }
+
+    private static void GenerateBedrockLayerPrefab()
+    {
+        var go = new GameObject("VoxTerrainBedrock");
+
+        string visTag = "_V";
+
+        //go.AddComponent<ChunkBounds>();
+        go.layer = Globals.inst.layerTerrain;
+        go.tag = visTag;
+
+        var bc = go.AddComponent<BoxCollider>();
+        bc.size = new Vector3(ManWorld.inst.TileSize,10f, ManWorld.inst.TileSize);
+        bc.center = new Vector3(ManWorld.inst.TileSize / 2f, -5f, ManWorld.inst.TileSize / 2f);
+        bc.isTrigger = false;
+        bc.tag = visTag;
+
+        var cgo = new GameObject("Terrain");
+        cgo.layer = Globals.inst.layerTerrain;
+        cgo.transform.parent = go.transform;
+        cgo.transform.localPosition = Vector3.zero;
+        cgo.transform.localRotation = Quaternion.identity;
+        cgo.transform.localScale = Vector3.one;
+        cgo.tag = visTag;
+
+        var mf = cgo.AddComponent<MeshFilter>();
+        mf.tag = visTag;
+        mf.mesh = PrismMeshGenerator.GenerateMesh(new Vector3[]
+            {
+            new Vector3(0, 0, 0),
+            new Vector3(ManWorld.inst.TileSize, 0, 0),
+            new Vector3(ManWorld.inst.TileSize, 0, ManWorld.inst.TileSize),
+            new Vector3(0, 0, ManWorld.inst.TileSize),
+        }, new Vector3(0, -10, 0), 1f);
+
+        var mr = cgo.AddComponent<MeshRenderer>();
+        mr.tag = visTag;
+        //mr.sharedMaterial = VoxTerrain.sharedMaterialDefault;
+        mr.sharedMaterial = VoxTerrain.mainTerrainMaterial;
+
+        var mc = cgo.AddComponent<MeshCollider>();
+        mc.convex = false;
+        mc.sharedMaterial = new PhysicMaterial();
+        mc.tag = visTag;
+    }
 }

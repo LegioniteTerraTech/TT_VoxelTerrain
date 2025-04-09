@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Microsoft.SqlServer.Server;
 using TerraTechETCUtil;
 using UnityEngine;
 
@@ -29,7 +30,7 @@ namespace TT_VoxelTerrain
             VoxTerrain vox = GetVoxelTerrain(ray, dist, out RaycastHit hitPoint);
             if (vox)
             {
-                vox.SphereDeltaVoxTerrain(hitPoint.point, radius / VoxTerrain.voxBlockResolution, 
+                vox.SemiSphereDeltaVoxTerrain(hitPoint.point, radius / VoxTerrain.voxBlockResolution, 
                     change, normal == default ? hitPoint.normal : normal, terrain);
                 return true;
             }
@@ -41,7 +42,7 @@ namespace TT_VoxelTerrain
             VoxTerrain vox = GetVoxelTerrain(ray, dist, out RaycastHit hitPoint);
             if (vox)
             {
-                vox.SphereLevelVoxTerrain(hitPoint.point, radius / VoxTerrain.voxBlockResolution,
+                vox.SemiSphereLevelVoxTerrain(hitPoint.point, hitPoint.point, radius / VoxTerrain.voxBlockResolution,
                     change, normal == default ? hitPoint.normal : normal, terrain);
                 return true;
             }
@@ -55,11 +56,27 @@ namespace TT_VoxelTerrain
             {
                 if (normal == default)
                     normal = hitPoint.normal;
-                vox.SphereLevelVoxTerrain(Vector3.ProjectOnPlane(hitPoint.point, normal) + Anchor,
-                    radius / VoxTerrain.voxBlockResolution, change, normal, terrain);
+                vox.SemiSphereLevelVoxTerrain(Vector3.ProjectOnPlane(hitPoint.point, normal) + Anchor,
+                    hitPoint.point, radius / VoxTerrain.voxBlockResolution, change, normal, terrain);
                 return true;
             }
             return false;
+        }
+        internal static Vector3 IntersectionOnPlane(Vector3 planePos, Vector3 planeNormal, Ray ray)
+        {
+            Plane plane = new Plane(planeNormal, planePos);
+            if (plane.Raycast(ray, out float CollisionMag) && CollisionMag < 128)
+                return (ray.direction.normalized * CollisionMag) + ray.origin;
+            return plane.ClosestPointOnPlane((ray.direction.normalized * 128) + ray.origin);
+            /*
+            // approximation
+            Vector3 deviance = Vector3.Project(ray.origin - planePos, planeNormal);
+            float collsionDist = deviance.magnitude;
+            Vector3 rayNorm = Vector3.Project(ray.direction * 128, planeNormal);
+            float rayDist = rayNorm.magnitude;
+            float correctedRayDistMulti = collsionDist / rayDist;
+            return ray.direction * correctedRayDistMulti;
+            */
         }
 
         static bool ARMED = false;
@@ -124,7 +141,7 @@ namespace TT_VoxelTerrain
                         DebugVoxel.PopupInfo(("ID " + vox.GetComponent<Visible>().ID).ToString(),
                             WorldPosition.FromScenePosition(hitPoint.point));
                         DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
-                            Vector3.Cross(hitPoint.normal, Vector3.forward), brushSize, new Color(0f, 0f, 0f, transp));
+                            Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(0f, 0f, 0f, transp));
                     }
                     else
                     {
@@ -138,25 +155,32 @@ namespace TT_VoxelTerrain
                                     cachedPoint = hitPoint.point;
                                     cachedNormal = hitPoint.normal;
                                 }
-                                Vector3 normal = Input.GetKey(KeyCode.LeftControl) ? Vector3.up : cachedNormal;
-                                vox.SphereLevelVoxTerrain(Vector3.ProjectOnPlane(hitPoint.point, normal) + cachedPoint,
-                                    brushSize / VoxTerrain.voxBlockResolution, strength, normal, BrushMat);
+                                Vector3 normal = Input.GetKey(KeyCode.LeftShift) ? Vector3.up : cachedNormal;
+                                Vector3 point = IntersectionOnPlane(cachedPoint, normal, camRay);
+                                vox.SemiSphereLevelVoxTerrain(point, hitPoint.point, brushSize / VoxTerrain.voxBlockResolution, 
+                                    strength, normal, BrushMat);
                                 //SendVoxBrush(new VoxBrushMessage(raycastHit.point, brushSize / TerrainGenerator.voxelSize, 1f, 0x00)); 
-                                DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, normal,
-                                    Vector3.Cross(normal, Vector3.forward), brushSize, new Color(1f, 1f, 0f, transp));
-                                DebugExtUtilities.DrawDirIndicator(hitPoint.point + (normal * 0.5f),
-                                    hitPoint.point - (normal * 0.5f), new Color(1f, 1f, 0f, transp));
+                                DebugExtUtilities.DrawDirIndicatorCircle(point, normal,
+                                    Vector3.Cross(normal, Vector3.forward).normalized, brushSize, new Color(1f, 1f, 0f, transp));
+                                DebugExtUtilities.DrawDirIndicator(point + (normal * 0.5f),
+                                    point - (normal * 0.5f), new Color(1f, 1f, 0f, transp));
+                            }
+                            else
+                            {
+                                Vector3 normal = Input.GetKey(KeyCode.LeftShift) ? Vector3.up : hitPoint.normal;
+                                DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, normal, 
+                                    Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(0.5f, 1f, 0f, transp));
                             }
                         }
                         else if (Input.GetKey(KeyCode.LeftShift))
                         {
                             if (Input.GetMouseButton(0))
                             {
-                                vox.SphereDeltaVoxTerrain(hitPoint.point, brushSize / VoxTerrain.voxBlockResolution,
+                                vox.SemiSphereDeltaVoxTerrain(hitPoint.point, brushSize / VoxTerrain.voxBlockResolution,
                                     strength, hitPoint.normal, 0x00);
                                 //SendVoxBrush(new VoxBrushMessage(raycastHit.point, brushSize / TerrainGenerator.voxelSize, 1f, 0x00)); 
                                 DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
-                                    Vector3.Cross(hitPoint.normal, Vector3.forward), brushSize, new Color(0f, 1f, 0f, transp));
+                                    Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(0f, 1f, 0f, transp));
                                 DebugExtUtilities.DrawDirIndicator(hitPoint.point, hitPoint.point + (hitPoint.normal * 2), new Color(0f, 1f, 0f, transp));
                             }
                             else if (Input.GetMouseButtonDown(2))
@@ -165,21 +189,21 @@ namespace TT_VoxelTerrain
                                 DebugVoxel.PopupInfo(("Mat " + vox.terrainType).ToString(),
                                     WorldPosition.FromScenePosition(hitPoint.point));
                                 DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
-                                    Vector3.Cross(hitPoint.normal, Vector3.forward), brushSize, new Color(1f, 0f, 1f, transp));
+                                    Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(1f, 0f, 1f, transp));
                             }
                             else
                                 DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
-                                    Vector3.Cross(hitPoint.normal, Vector3.forward), brushSize, new Color(1f, 1f, 1f, transp));
+                                    Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(1f, 1f, 1f, transp));
                         }
                         else
                         {
                             if (Input.GetMouseButton(0))
                             {
-                                vox.SphereDeltaVoxTerrain(hitPoint.point, brushSize / VoxTerrain.voxBlockResolution,
+                                vox.SemiSphereDeltaVoxTerrain(hitPoint.point, brushSize / VoxTerrain.voxBlockResolution,
                                     -strength, hitPoint.normal, BrushMat);
                                 //SendVoxBrush(new VoxBrushMessage(raycastHit.point, brushSize / TerrainGenerator.voxelSize, -1f, 0x00));
                                 DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
-                                    Vector3.Cross(hitPoint.normal, Vector3.forward), brushSize, new Color(1f, 0f, 0f, transp));
+                                    Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(1f, 0f, 0f, transp));
                                 DebugExtUtilities.DrawDirIndicator(hitPoint.point, hitPoint.point + hitPoint.normal, new Color(1f, 0f, 0f, transp));
                             }
                             else if (Input.GetMouseButtonDown(2))
@@ -187,11 +211,11 @@ namespace TT_VoxelTerrain
                                 DebugVoxel.PopupInfo(("ID " + vox.GetComponent<Visible>().ID).ToString(),
                                     WorldPosition.FromScenePosition(hitPoint.point));
                                 DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
-                                    Vector3.Cross(hitPoint.normal, Vector3.forward), brushSize, new Color(0f, 0f, 0f, transp));
+                                    Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(0f, 0f, 0f, transp));
                             }
                             else
                                 DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
-                                    Vector3.Cross(hitPoint.normal, Vector3.forward), brushSize, new Color(0f, 0f, 0f, transp));
+                                    Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(0f, 0f, 0f, transp));
                         }
                     }
                 }

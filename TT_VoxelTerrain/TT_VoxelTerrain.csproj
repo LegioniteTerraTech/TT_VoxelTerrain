@@ -95,6 +95,9 @@
       <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\TerraTech\TerraTechWin64_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="SafeSaves">
+      <HintPath>..\..\..\..\Desktop\SafeSaves\SafeSaves\obj\Steam\SafeSaves.dll</HintPath>
+    </Reference>
     <Reference Include="UnityEngine.TerrainModule">
       <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\TerraTech\TerraTechWin64_Data\Managed\UnityEngine.TerrainModule.dll</HintPath>
       <Private>False</Private>
@@ -171,6 +174,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <None Include="DiggerTank.cs" />
     <Compile Include="ManVoxelTerrain.cs" />
     <Compile Include="DebugVoxel.cs" />
     <Compile Include="KickStartVoxelTerrain.cs" />
