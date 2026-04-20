@@ -57,9 +57,6 @@
       <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\workshop\content\285920\2758915184\ConfigHelper.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="TerraTechETCUtil">
-      <HintPath>..\..\TTETCUtil\TerraTechETCUtil\TerraTechETCUtil\obj\Steam\TerraTechETCUtil.dll</HintPath>
-    </Reference>
   </ItemGroup>
   <ItemGroup Condition="'$(Configuration)'=='Release'OR'$(Configuration)'=='Debug'">
     <!--> zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz </!-->
@@ -97,6 +94,10 @@
     </Reference>
     <Reference Include="SafeSaves">
       <HintPath>..\..\..\..\Desktop\SafeSaves\SafeSaves\obj\Steam\SafeSaves.dll</HintPath>
+    </Reference>
+    <Reference Include="TerraTechETCUtil, Version=1.4.104.25, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\TTETCUtil\TerraTechETCUtil\TerraTechETCUtil\bin\Steam\TerraTechETCUtil.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.TerrainModule">
       <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\TerraTech\TerraTechWin64_Data\Managed\UnityEngine.TerrainModule.dll</HintPath>
