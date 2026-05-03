@@ -4,10 +4,11 @@ using System.Linq;
 using System.Text;
 using UnityEngine;
 using TerraTechETCUtil;
+using TT_VoxelTerrain;
 
 internal static class DebugVoxel
 {
-    private const string modName = "Voxel Terrain";
+    private const string modName = ManVoxelTerrain.ModName;
 
     internal static bool ShouldLog = true;
     internal const bool LogAll = false;

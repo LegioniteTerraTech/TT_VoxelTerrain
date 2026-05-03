@@ -20,7 +20,7 @@ using UnityEngine;
  *			not required, if you let us know with a link to the asset.
  */
 
-public static class NormalSolver
+public class NormalSolver
 {
     /// <summary>
     ///     Recalculate the normals of a mesh based on an angle threshold. This takes
@@ -31,28 +31,30 @@ public static class NormalSolver
     ///     The smoothing angle. Note that triangles that already share
     ///     the same vertex will be smooth regardless of the angle!
     /// </param>
-    public static void RecalculateNormals(this Mesh mesh, float angle)
+    /* // OBSOLETE
+    public void RecalculateNormals(Mesh mesh, float angle)
     {
         var normals = RecalculateNormals(mesh.triangles, mesh.vertices, angle);
         mesh.SetNormals(normals);
-    }
+    }//*/
 
-    public static List<Vector3> RecalculateNormals(List<int> triangles, List<Vector3> vertices, float angle)
+    Vector3[] triNormals = new Vector3[16]; //Holds the normal of each triangle
+    List<Vector3> normals = new List<Vector3>();
+    Dictionary<VertexKey, VertexEntry> dictionary = new Dictionary<VertexKey, VertexEntry>(16);
+    public List<Vector3> RecalculateNormals(List<int> triangles, List<Vector3> vertices, float angle)
     {
-        return RecalculateNormals(triangles.ToArray(), vertices.ToArray(), angle);
-    }
-
-    public static List<Vector3> RecalculateNormals(int[] triangles, Vector3[] vertices, float angle)
-    {
-        var triNormals = new Vector3[triangles.Length / 3]; //Holds the normal of each triangle
-        var normals = new List<Vector3>(new Vector3[vertices.Length]);
+        if (triNormals.Length < triangles.Count / 3)
+            Array.Resize(ref triNormals, triangles.Count / 3);
+        normals.Clear();
+        for (int i = 0; i < vertices.Count; i++)
+            normals.Add(default);
 
         angle = angle * Mathf.Deg2Rad;
 
-        var dictionary = new Dictionary<VertexKey, VertexEntry>(vertices.Length);
+        dictionary.Clear();
 
         //Goes through all the triangles and gathers up data to be used later
-        for (var i = 0; i < triangles.Length; i += 3)
+        for (var i = 0; i < triangles.Count; i += 3)
         {
             int i1 = triangles[i];
             int i2 = triangles[i + 1];

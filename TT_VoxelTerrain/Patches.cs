@@ -1,17 +1,57 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using HarmonyLib;
+using TerraTechETCUtil;
 using UnityEngine;
-using System.Reflection;
-using UnityEngine.Networking;
+using static ModuleMeleeWeapon;
 
 
 namespace TT_VoxelTerrain
 {
     public static class Patches
     {
+        [HarmonyPatch(typeof(GameCursor), "GetCursorState")]
+        [HarmonyPriority(Priority.VeryLow)]
+        private static class CursorPatches
+        {
+            /// <summary>
+            /// See CursorChanger for more information
+            /// </summary>
+            /// <param name="__result"></param>
+            internal static void Postfix(ref GameCursor.CursorState __result)
+            {
+                if (!CursorChanger.AddedNewCursors)
+                    return;
+                if (!ManPauseGame.inst.IsPaused && !ManPointer.inst.IsInteractionBlocked &&
+                    ManModGUI.IsMouseOverModGUI && MassShifter.ARMED)
+                {
+                    switch (MassShifter.state)
+                    {
+                        case TerraformerCursorState.None:
+                            break;
+                        case TerraformerCursorState.Leveling:
+                            __result = CursorChanger.CursorIndexCache[0];
+                            break;
+                        case TerraformerCursorState.Up:
+                            __result = CursorChanger.CursorIndexCache[1];
+                            break;
+                        case TerraformerCursorState.Default:
+                            __result = CursorChanger.CursorIndexCache[2];
+                            break;
+                        case TerraformerCursorState.Down:
+                            __result = CursorChanger.CursorIndexCache[3];
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+
+        }
+
+        /// <summary>
+        /// Prevent the game from trying to save this as it's using it's own saving system!
+        /// </summary>
         [HarmonyPatch(typeof(WorldTile), "AddVisible")]
         private static class EnforceNotActuallyScenery
         {
@@ -36,18 +76,6 @@ namespace TT_VoxelTerrain
         }
 
 
-        [HarmonyPatch(typeof(Visible), "OnPool")]
-        private static class VisibleIsBeingStubborn
-        {
-            internal static void Prefix(ref Visible __instance)
-            {
-                if (__instance.GetComponent<VoxTerrain>())
-                {
-                    __instance.m_ItemType = new ItemTypeInfo(VoxGenerator.ObjectTypeVoxelChunk, 0);
-                }
-            }
-        }
-
         [HarmonyPatch(typeof(Visible), "MoveAboveGround")]
         private static class DenySurfTeleports
         {
@@ -61,6 +89,16 @@ namespace TT_VoxelTerrain
             }
         }
 
+
+        [HarmonyPatch(typeof(Visible), "OnPool")]
+        private static class VisibleIsBeingStubborn
+        {
+            internal static void Prefix(ref Visible __instance)
+            {
+                if (__instance.GetComponent<VoxTerrain>() is VoxTerrain state21)
+                    __instance.m_ItemType = state21.OurType;
+            }
+        }
 
         /*
         [HarmonyPatch(typeof(ManDamage), "DamageableType")]
@@ -81,10 +119,8 @@ namespace TT_VoxelTerrain
         {
             internal static void Prefix(ref Visible __instance)
             {
-                if (__instance.GetComponent<VoxTerrain>())
-                {
-                    __instance.m_ItemType = new ItemTypeInfo(VoxGenerator.ObjectTypeVoxelChunk, 0);
-                }
+                if (__instance.GetComponent<VoxTerrain>() is VoxTerrain state21)
+                    __instance.m_ItemType = state21.OurType;
             }
         }
 
@@ -240,9 +276,9 @@ namespace TT_VoxelTerrain
                     __result = scenePos.y - raycasthit.distance;
                     return false;
                 }
-                if (Physics.Raycast(scenePos + Vector3.up * VoxTerrain.voxBlockResolution, Vector3.down, out raycasthit, 8192, layerMask, QueryTriggerInteraction.Ignore)/* && raycasthit.collider.GetComponentInParent<TerrainGenerator.VoxTerrain>()*/)
+                if (Physics.Raycast(scenePos + Vector3.up * VoxelGlobals.voxBlockResolution, Vector3.down, out raycasthit, 8192, layerMask, QueryTriggerInteraction.Ignore)/* && raycasthit.collider.GetComponentInParent<TerrainGenerator.VoxTerrain>()*/)
                 {
-                    __result = scenePos.y + VoxTerrain.voxBlockResolution - raycasthit.distance;
+                    __result = scenePos.y + VoxelGlobals.voxBlockResolution - raycasthit.distance;
                     return false;
                 }
                 if (Physics.Raycast(scenePos + Vector3.up * 4096 + Vector3.one * 0.001f, Vector3.down, out raycasthit, 8192, layerMask, QueryTriggerInteraction.Ignore)/* && raycasthit.collider.GetComponentInParent<TerrainGenerator.VoxTerrain>()*/)
@@ -267,32 +303,66 @@ namespace TT_VoxelTerrain
         */
 
         [HarmonyPatch(typeof(Tank), "HandleCollision")]
-        private static class TerrainCollisionBypassPatch
+        private static class TankTerrainCollisionBypassPatch
         {
-            internal static void Prefix(Tank __instance, Collision collisionData, bool stay, ref Visible __state)
+            private static Visible state1;
+            private static VoxTerrain state2;
+            //*
+            internal static void Prefix(Tank __instance, Collision collisionData, bool stay)
             {
                 var go = collisionData.GetContact(0).thisCollider;
-                if (go.transform.parent.GetComponent<VoxTerrain>())
+                if (go?.transform.GetComponent<VoxTerrain>() is VoxTerrain state21)
                 {
-                    var V = go.GetComponentInParent<Visible>();
-                    if (V)
+                    state1 = go.GetComponentInParent<Visible>();
+                    if (state1)
                     {
-                        V.m_ItemType = new ItemTypeInfo(ObjectTypes.Scenery, 0);
-                        __state = V;
-                        DebugVoxel.Log("oh yea vox");
+                        state2 = state21;
+                        state1.m_ItemType = VoxelGlobals.GetDamageableObjectType;
+                        DebugVoxel.Info("oh yea vox");
                         return;
                     }
                 }
-                __state = null;
+                state1 = null;
             }
-            internal static void Postfix(ref Visible __state)
+            internal static void Postfix()
             {
-                if (__state)
+                if (state1 != null && state2 != null)
                 {
-                    __state.m_ItemType = new ItemTypeInfo(VoxGenerator.ObjectTypeVoxelChunk, 0);
-                     DebugVoxel.Log("vox yea oh");
+                    state1.m_ItemType = state2.OurType;
+                    DebugVoxel.Info("vox yea oh");
                 }
+            }//*/
+        }
+        [HarmonyPatch(typeof(ModuleMeleeWeapon), "HandleCollision")]
+        private static class MeleeTerrainMining
+        {
+            private static Visible state1;
+            private static VoxTerrain state2;
+            //*
+            internal static void Prefix(ModuleMeleeWeapon __instance, FrameCollisionInfo collisionInfo)
+            {
+                var go = collisionInfo.OtherCol;
+                if (go?.transform.GetComponent<VoxTerrain>() is VoxTerrain state21)
+                {
+                    state1 = go.GetComponentInParent<Visible>();
+                    if (state1)
+                    {
+                        state2 = state21;
+                        state1.m_ItemType = VoxelGlobals.GetDamageableObjectType;
+                        DebugVoxel.Info("oh yea vox");
+                        return;
+                    }
+                }
+                state1 = null;
             }
+            internal static void Postfix()
+            {
+                if (state1 != null && state2 != null)
+                {
+                    state1.m_ItemType = state2.OurType;
+                    DebugVoxel.Info("vox yea oh");
+                }
+            }//*/
         }
     }
 }

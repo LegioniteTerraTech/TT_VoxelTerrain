@@ -1,8 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using Microsoft.SqlServer.Server;
 using TerraTechETCUtil;
 using UnityEngine;
 
@@ -11,12 +8,13 @@ namespace TT_VoxelTerrain
 
     internal class MassShifter : MonoBehaviour
     {
-        private static List<int> tris = new List<int>();
-        private static List<Vector3> vertices = new List<Vector3>();
+
+        //private static List<int> tris = new List<int>();
+        //private static List<Vector3> vertices = new List<Vector3>();
 
         public static VoxTerrain GetVoxelTerrain(Ray ray, float dist, out RaycastHit raycastHit)
         {
-            if (Physics.Raycast(ray, out raycastHit, dist, VoxTerrain.VoxelTerrainOnlyLayer, QueryTriggerInteraction.Ignore))
+            if (Physics.Raycast(ray, out raycastHit, dist, VoxelGlobals.VoxelTerrainOnlyLayer, QueryTriggerInteraction.Ignore))
             {
                 VoxTerrain vox = raycastHit.transform.gameObject.GetComponentInParent<VoxTerrain>();
                 if (vox != null)
@@ -30,7 +28,7 @@ namespace TT_VoxelTerrain
             VoxTerrain vox = GetVoxelTerrain(ray, dist, out RaycastHit hitPoint);
             if (vox)
             {
-                vox.SemiSphereDeltaVoxTerrain(hitPoint.point, radius / VoxTerrain.voxBlockResolution, 
+                vox.SemiSphereDeltaVoxTerrain(hitPoint.point, radius / VoxelGlobals.voxBlockResolution, 
                     change, normal == default ? hitPoint.normal : normal, terrain);
                 return true;
             }
@@ -42,7 +40,7 @@ namespace TT_VoxelTerrain
             VoxTerrain vox = GetVoxelTerrain(ray, dist, out RaycastHit hitPoint);
             if (vox)
             {
-                vox.SemiSphereLevelVoxTerrain(hitPoint.point, hitPoint.point, radius / VoxTerrain.voxBlockResolution,
+                vox.SemiSphereLevelVoxTerrain(hitPoint.point, hitPoint.point, radius / VoxelGlobals.voxBlockResolution,
                     change, normal == default ? hitPoint.normal : normal, terrain);
                 return true;
             }
@@ -57,7 +55,7 @@ namespace TT_VoxelTerrain
                 if (normal == default)
                     normal = hitPoint.normal;
                 vox.SemiSphereLevelVoxTerrain(Vector3.ProjectOnPlane(hitPoint.point, normal) + Anchor,
-                    hitPoint.point, radius / VoxTerrain.voxBlockResolution, change, normal, terrain);
+                    hitPoint.point, radius / VoxelGlobals.voxBlockResolution, change, normal, terrain);
                 return true;
             }
             return false;
@@ -79,33 +77,79 @@ namespace TT_VoxelTerrain
             */
         }
 
-        static bool ARMED = false;
+        internal static bool ARMED = false;
+        public static TerraformerCursorState state = 0;
+        public static KeyCode toolHotkey = KeyCode.H;
+        public static int toolHotkeySerial = (int)toolHotkey;
         static Vector3 cachedPoint = Vector3.zero;
         static Vector3 cachedNormal = Vector3.up;
         static byte BrushMat = 0xFF;
-        static int brushSize = Mathf.RoundToInt(VoxTerrain.voxBlockResolution);
+        static int brushSize = Mathf.RoundToInt(VoxelGlobals.voxBlockResolution);
+
+        public static KeyCode toolLevel = KeyCode.LeftControl;
+        public static int toolLevelSerial = (int)toolLevel;
+        public static KeyCode toolUp = KeyCode.LeftShift;
+        public static int toolUpSerial = (int)toolUp;
+        public static KeyCode toolDebug = KeyCode.Backspace;
+        public static int toolDebugSerial = (int)toolDebug;
+
+        public static KeyCode toolAdd = KeyCode.KeypadPlus;
+        public static int toolAddSerial = (int)toolAdd;
+        static bool AddBool => Input.GetKeyDown(toolAdd); //|| Input.GetKeyDown(KeyCode.RightBracket);
+        public static KeyCode toolSub = KeyCode.KeypadMinus;
+        public static int toolSubSerial = (int)toolSub;
+        static bool SubBool => Input.GetKeyDown(toolSub); //|| Input.GetKeyDown(KeyCode.LeftBracket);
+
+        internal void OnGUI()
+        {
+            if (ARMED && Input.GetMouseButton(0) && !ManPointer.inst.IsInteractionBlocked) // LOCK PLAYER CONTROLS
+                ManModGUI.IsMouseOverAnyModGUI = 1;
+        }
+        public static void ToggleState(bool active)
+        {
+            if (ARMED != active)
+            {
+                ARMED = active;
+                if (active)
+                {
+                    ManSFX.inst.PlayUISFX(ManSFX.UISfxType.Open);
+                    UIHelpersExt.BigF5broningBannerSP("Enabled Terraforming", false, 3);
+                    showBrushSize = true;
+                }
+                else
+                {
+                    ManSFX.inst.PlayUISFX(ManSFX.UISfxType.Close);
+                    UIHelpersExt.BigF5broningBannerSP("Disabled Terraforming", false, 3);
+                }
+                try
+                {
+                    ManVoxelTerrain.TheTerrainToolButton.SetToggleState(ARMED);
+                }
+                catch { }
+            }
+        }
+        static bool showBrushSize = false;
         internal void Update()
         {
-            bool showBrushSize = false;
             bool showBrushMat = false;
+            /*
             if (Input.GetKey(KeyCode.LeftAlt) && 
                 ((Input.GetKey(KeyCode.Equals) && Input.GetKeyDown(KeyCode.Minus)) ||
-                (Input.GetKeyDown(KeyCode.Equals) && Input.GetKey(KeyCode.Minus))))
-            {
-                ARMED = !ARMED;
-                showBrushSize = true;
-            }
+                (Input.GetKeyDown(KeyCode.Equals) && Input.GetKey(KeyCode.Minus))))//*/
+
+            if (Input.GetKeyDown(toolHotkey))
+                ToggleState(!ARMED);
 
             if (ARMED)
             {
-                if (Input.GetKey(KeyCode.LeftShift))
+                if (Input.GetKey(toolUp))
                 {
-                    if (Input.GetKeyDown(KeyCode.KeypadPlus) || Input.GetKeyDown(KeyCode.RightBracket))
+                    if (AddBool)
                     {
                         BrushMat++;
                         showBrushMat = true;
                     }
-                    if (Input.GetKeyDown(KeyCode.KeypadMinus) || Input.GetKeyDown(KeyCode.LeftBracket))
+                    if (SubBool)
                     {
                         BrushMat--;
                         showBrushMat = true;
@@ -113,12 +157,12 @@ namespace TT_VoxelTerrain
                 }
                 else
                 {
-                    if (Input.GetKeyDown(KeyCode.KeypadPlus) || Input.GetKeyDown(KeyCode.RightBracket))
+                    if (AddBool)
                     {
                         brushSize++;
                         showBrushSize = true;
                     }
-                    if (Input.GetKeyDown(KeyCode.KeypadMinus) || Input.GetKeyDown(KeyCode.LeftBracket))
+                    if (SubBool)
                     {
                         brushSize = Math.Max(brushSize - 1, 1);
                         showBrushSize = true;
@@ -136,8 +180,10 @@ namespace TT_VoxelTerrain
                         DebugVoxel.PopupInfo(brushSize.ToString(),
                             WorldPosition.FromScenePosition(hitPoint.point));
                     float transp = 0.6f;
-                    if (Input.GetKeyDown(KeyCode.Backspace))
+                    float SFXtime = 0.75f;
+                    if (Input.GetKeyDown(toolDebug))
                     {
+                        state = TerraformerCursorState.Default;
                         DebugVoxel.PopupInfo(("ID " + vox.GetComponent<Visible>().ID).ToString(),
                             WorldPosition.FromScenePosition(hitPoint.point));
                         DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
@@ -146,8 +192,9 @@ namespace TT_VoxelTerrain
                     else
                     {
                         float strength = 1f;
-                        if (Input.GetKey(KeyCode.LeftControl))
+                        if (Input.GetKey(toolLevel))
                         {
+                            state = TerraformerCursorState.Leveling;
                             if (Input.GetMouseButton(0))
                             {
                                 if (Input.GetMouseButtonDown(0))
@@ -157,13 +204,14 @@ namespace TT_VoxelTerrain
                                 }
                                 Vector3 normal = Input.GetKey(KeyCode.LeftShift) ? Vector3.up : cachedNormal;
                                 Vector3 point = IntersectionOnPlane(cachedPoint, normal, camRay);
-                                vox.SemiSphereLevelVoxTerrain(point, hitPoint.point, brushSize / VoxTerrain.voxBlockResolution, 
+                                vox.SemiSphereLevelVoxTerrain(point, hitPoint.point, brushSize / VoxelGlobals.voxBlockResolution, 
                                     strength, normal, BrushMat);
                                 //SendVoxBrush(new VoxBrushMessage(raycastHit.point, brushSize / TerrainGenerator.voxelSize, 1f, 0x00)); 
                                 DebugExtUtilities.DrawDirIndicatorCircle(point, normal,
                                     Vector3.Cross(normal, Vector3.forward).normalized, brushSize, new Color(1f, 1f, 0f, transp));
                                 DebugExtUtilities.DrawDirIndicator(point + (normal * 0.5f),
                                     point - (normal * 0.5f), new Color(1f, 1f, 0f, transp));
+                                SFXHelpers.TankPlayLooping(Singleton.playerTank, TechAudio.SFXType.GCPlasmaCutter, SFXtime, 1);
                             }
                             else
                             {
@@ -172,16 +220,18 @@ namespace TT_VoxelTerrain
                                     Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(0.5f, 1f, 0f, transp));
                             }
                         }
-                        else if (Input.GetKey(KeyCode.LeftShift))
+                        else if (Input.GetKey(toolUp))
                         {
+                            state = TerraformerCursorState.Up;
                             if (Input.GetMouseButton(0))
                             {
-                                vox.SemiSphereDeltaVoxTerrain(hitPoint.point, brushSize / VoxTerrain.voxBlockResolution,
+                                vox.SemiSphereDeltaVoxTerrain(hitPoint.point, brushSize / VoxelGlobals.voxBlockResolution,
                                     strength, hitPoint.normal, 0x00);
                                 //SendVoxBrush(new VoxBrushMessage(raycastHit.point, brushSize / TerrainGenerator.voxelSize, 1f, 0x00)); 
                                 DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
                                     Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(0f, 1f, 0f, transp));
                                 DebugExtUtilities.DrawDirIndicator(hitPoint.point, hitPoint.point + (hitPoint.normal * 2), new Color(0f, 1f, 0f, transp));
+                                SFXHelpers.TankPlayLooping(Singleton.playerTank, TechAudio.SFXType.Refinery, SFXtime, 1);
                             }
                             else if (Input.GetMouseButtonDown(2))
                             {
@@ -197,14 +247,16 @@ namespace TT_VoxelTerrain
                         }
                         else
                         {
+                            state = TerraformerCursorState.Down;
                             if (Input.GetMouseButton(0))
                             {
-                                vox.SemiSphereDeltaVoxTerrain(hitPoint.point, brushSize / VoxTerrain.voxBlockResolution,
+                                vox.SemiSphereDeltaVoxTerrain(hitPoint.point, brushSize / VoxelGlobals.voxBlockResolution,
                                     -strength, hitPoint.normal, BrushMat);
                                 //SendVoxBrush(new VoxBrushMessage(raycastHit.point, brushSize / TerrainGenerator.voxelSize, -1f, 0x00));
                                 DebugExtUtilities.DrawDirIndicatorCircle(hitPoint.point, hitPoint.normal,
                                     Vector3.Cross(hitPoint.normal, Vector3.forward).normalized, brushSize, new Color(1f, 0f, 0f, transp));
                                 DebugExtUtilities.DrawDirIndicator(hitPoint.point, hitPoint.point + hitPoint.normal, new Color(1f, 0f, 0f, transp));
+                                SFXHelpers.TankPlayLooping(Singleton.playerTank, TechAudio.SFXType.VENFlameThrower, SFXtime, 1);
                             }
                             else if (Input.GetMouseButtonDown(2))
                             {
@@ -219,7 +271,10 @@ namespace TT_VoxelTerrain
                         }
                     }
                 }
+                else
+                    state = TerraformerCursorState.None;
             }
+            showBrushSize = false;
         }
     }
 }

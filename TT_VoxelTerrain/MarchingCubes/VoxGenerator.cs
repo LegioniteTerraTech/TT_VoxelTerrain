@@ -9,6 +9,7 @@ using Nuterra;
 using System.IO;
 using TT_VoxelTerrain;
 using FMOD;
+using TerraTechETCUtil;
 public class VoxGenerator : MonoBehaviour
 {
     /// <summary>
@@ -36,7 +37,7 @@ public class VoxGenerator : MonoBehaviour
         //if (Dirty && worldTile.m_LoadStep >= WorldTile.LoadStep.PopulatingScenery)
         if (worldTile.m_LoadStep >= WorldTile.LoadStep.Populated)
         {
-            GenerateTerrain();//StartCoroutine("GenerateTerrain");
+            GenerateTerrainThenDeactivate();//StartCoroutine("GenerateTerrain");
         }
     }
 
@@ -44,7 +45,7 @@ public class VoxGenerator : MonoBehaviour
     /// <summary>
     /// This CREATES the one terrain TILE
     /// </summary>
-    private void GenerateTerrain()
+    private void GenerateTerrainThenDeactivate()
     {
         try
         {
@@ -55,12 +56,12 @@ public class VoxGenerator : MonoBehaviour
 
             var tc = _terrain.GetComponent<TerrainCollider>();
             var b = tc.bounds;
-            int size = Mathf.RoundToInt(VoxTerrain.voxChunkSize / VoxTerrain.voxBlockResolution);
+            int size = Mathf.RoundToInt(VoxelGlobals.voxChunkSize / VoxelGlobals.voxBlockResolution);
             float terrainHeight = worldTile.Terrain.transform.position.y;
 
-            for (int z = 0; z < VoxTerrain.voxChunksPerTile; z++)
+            for (int z = 0; z < VoxelGlobals.voxChunksPerTile; z++)
             {
-                for (int x = 0; x < VoxTerrain.voxChunksPerTile; x++)
+                for (int x = 0; x < VoxelGlobals.voxChunksPerTile; x++)
                 {
                     float chWorld;
                     int centerHeight;
@@ -74,7 +75,7 @@ public class VoxGenerator : MonoBehaviour
                         case VoxelState.RandD:
                             chWorld = worldTile.GetTerrainheight(_terrain.transform.position + Vector3.one);
                             MarchingCubes.DefaultSampleHeight = chWorld;
-                            centerHeight = (int)(chWorld / VoxTerrain.voxChunkSize);
+                            centerHeight = (int)(chWorld / VoxelGlobals.voxChunkSize);
                             break;
                         default:
                             /*
@@ -91,7 +92,7 @@ public class VoxGenerator : MonoBehaviour
                                 chWorld = worldTile.GetTerrainheight(_terrain.transform.position + Vector3.one);
                             }
                             */
-                            centerHeight = (int)(terrainHeight / VoxTerrain.voxChunkSize);
+                            centerHeight = (int)(terrainHeight / VoxelGlobals.voxChunkSize);
                             break;
                     }
                     //int centerHeight = (int)(chWorld / ChunkSize);
@@ -99,7 +100,7 @@ public class VoxGenerator : MonoBehaviour
                     //for (int y = minY; y < Mathf.CeilToInt(centerHeight / ChunkSize + voxelSize); y++)
                     //  for (int y = Mathf.FloorToInt(b.min.y / ChunkSize); y < Mathf.CeilToInt(b.max.y / ChunkSize); y++) //Change to use buffer of tile, creating chunks where needed
                     //{
-                    var offset = new Vector3(x, centerHeight, z) * VoxTerrain.voxChunkSize;
+                    var offset = new Vector3(x, centerHeight, z) * VoxelGlobals.voxChunkSize;
                     var t = CheckAndGenerateVoxPart(offset + transform.position);
                     //t.transform.rotation = Quaternion.identity;
                     //t.transform.position = offset + transform.position;
@@ -146,7 +147,7 @@ public class VoxGenerator : MonoBehaviour
     private static Collider[] resultsCache = new Collider[32];
     internal static VoxTerrain OverlapCheckRecentered(Vector3 scenePos)
     {
-        return OverlapCheckFast(VoxTerrain.GetVoxCenter(scenePos), VoxTerrain.voxChunkSize / 8f);
+        return OverlapCheckFast(VoxelGlobals.GetVoxCenter(scenePos), VoxelGlobals.voxChunkSize / 8f);
     }
     internal static VoxTerrain OverlapCheckFast(Vector3 scenePos, float radius)
     {
@@ -154,7 +155,7 @@ public class VoxGenerator : MonoBehaviour
         while (true)
         {
             Count = Physics.OverlapSphereNonAlloc(scenePos, radius,
-                resultsCache, VoxTerrain.VoxelTerrainOnlyLayer, QueryTriggerInteraction.Collide);
+                resultsCache, VoxelGlobals.VoxelTerrainOnlyLayer, QueryTriggerInteraction.Collide);
             if (Count > resultsCache.Length)
             {
                 Array.Resize(ref resultsCache, Count);
@@ -170,26 +171,93 @@ public class VoxGenerator : MonoBehaviour
         }
         return null;
     }
-    
+
+
+    internal static void AwakenAndRepositionAffectedRigidbodies(WorldPosition WP)
+    {
+        Vector3 scenePos = WP.ScenePosition;
+        foreach (var item in WP.IterateRectVolumeDiameter(2))
+        {
+            WorldTile tile = ManWorld.inst.TileManager.LookupTile(WP.TileCoord);
+            if (tile?.Visibles != null)
+            {
+                int ChunkType = (int)ObjectTypes.Chunk;
+                if (tile.Visibles.Length > ChunkType)
+                {
+                    Dictionary<int, Visible> lookup = tile.Visibles[ChunkType];
+                    if (lookup != null)
+                    {
+                        foreach (var item2 in lookup.Values)
+                        {
+                            var rbody = item2?.rbody;
+                            if (rbody != null && !rbody.isKinematic &&
+                                VoxelGlobals.WithinVoxWithRadius(scenePos, item2.centrePosition, item2.Radius))
+                            {
+                                Vector3 pos = item2.centrePosition;
+                                if (ManWorld.inst.TryProjectToGround(ref pos) && rbody.position.y < pos.y)
+                                    item2.Teleport(pos, item2.trans.rotation, true, false);
+                                rbody.WakeUp();
+                            }
+                        }
+                    }
+                    lookup = tile.Visibles[(int)ObjectTypes.Vehicle];
+                    if (lookup != null)
+                    {
+                        foreach (var item2 in lookup.Values)
+                        {
+                            var rbody = item2?.rbody;
+                            if (rbody != null && !rbody.isKinematic &&
+                                VoxelGlobals.WithinVoxWithRadius(scenePos, item2.centrePosition, item2.Radius))
+                                rbody.WakeUp();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 
     internal static IEnumerable<ResourceDispenser> IterateNearbyScenery(Vector3 scenePos)
     {
-        return SceneryOverlapCheckFast(VoxTerrain.GetVoxCenter(scenePos));
+        return SceneryOverlapCheckFast(VoxelGlobals.GetVoxCenter(scenePos));
     }
     internal static IEnumerable<ResourceDispenser> IterateNearbyScenery(VoxTerrain terra)
     {
         return SceneryOverlapCheckFast(terra.SceneCenter);
     }
+
+    internal static IEnumerable<ResourceDispenser> SceneryOverlapCheckFastest(WorldPosition WP)
+    {
+        Vector3 scenePos = WP.ScenePosition;
+        foreach (var item in WP.IterateRectVolumeDiameter(2))
+        {
+            WorldTile tile = ManWorld.inst.TileManager.LookupTile(item);
+            if (tile?.Visibles != null)
+            {
+                int SceneryType = (int)ObjectTypes.Scenery;
+                if (tile.Visibles.Length > SceneryType && tile.Visibles[SceneryType] is Dictionary<int, Visible> lookup)
+                {
+                    foreach (var item2 in lookup.Values)
+                    {
+                        var resDisp = item2?.resdisp;
+                        if (resDisp != null && VoxelGlobals.WithinVoxVerticalWithRadius(scenePos, item2.centrePosition, 3))
+                            yield return resDisp;
+                    }
+                }
+            }
+        }
+    }
+
     private static bool GetAllScenery = true;
     internal static IEnumerable<ResourceDispenser> SceneryOverlapCheckFast(Vector3 scenePos)
     {
-        Vector3 min = scenePos - (Vector3.one * VoxTerrain.voxChunkSize);
-        float size = VoxTerrain.voxChunkSize * 2f;
-        foreach (var vis in ManVisible.inst.VisiblesTouchingRadius(scenePos, VoxTerrain.voxChunkSize * 1.43f,
+        Vector3 min = scenePos - (Vector3.one * VoxelGlobals.voxChunkSize);
+        float size = VoxelGlobals.voxChunkSize * 2f;
+        foreach (var vis in ManVisible.inst.VisiblesTouchingRadius(scenePos, VoxelGlobals.voxChunkSize * 1.43f,
             new Bitfield<ObjectTypes>(new ObjectTypes[] { ObjectTypes.Scenery })))
         {
-            if (vis?.resdisp && (GetAllScenery || vis.damageable) && 
-                VoxTerrain.Within(min, vis.centrePosition, size) &&
+            if (vis?.resdisp && (GetAllScenery || vis.damageable) &&
+                VoxelGlobals.Within(min, vis.centrePosition, size) &&
                 !vis.GetComponent<VoxTerrain>())
                 yield return vis.resdisp;
         }
@@ -199,7 +267,7 @@ public class VoxGenerator : MonoBehaviour
         int Count;
         while (true)
         {
-            Count = Physics.OverlapSphereNonAlloc(scenePos, VoxTerrain.voxChunkSize * 1.41f,
+            Count = Physics.OverlapSphereNonAlloc(scenePos, VoxelGlobals.voxChunkSize * 1.41f,
                 resultsCache, Globals.inst.layerScenery, QueryTriggerInteraction.Collide);
             if (Count > resultsCache.Length)
             {
@@ -209,16 +277,16 @@ public class VoxGenerator : MonoBehaviour
             else
                 break;
         }
-        Vector3 min = scenePos - (Vector3.one * VoxTerrain.voxChunkSize);
-        float size = VoxTerrain.voxChunkSize * 2f;
+        Vector3 min = scenePos - (Vector3.one * VoxelGlobals.voxChunkSize);
+        float size = VoxelGlobals.voxChunkSize * 2f;
         for (int i = 0; Count > i; i++)
         {
             Collider result = resultsCache[i];
             if (result)
             {
                 Visible vis = ManVisible.inst.FindVisible(result);
-                if (vis?.resdisp && vis.damageable && 
-                    VoxTerrain.Within(min, vis.centrePosition, size))
+                if (vis?.resdisp && vis.damageable &&
+                    VoxelGlobals.Within(min, vis.centrePosition, size))
                     yield return vis;
             }
         }
@@ -255,6 +323,8 @@ public class VoxGenerator : MonoBehaviour
         vinst.name = "VoxTerrainChunk";
         vinst.gameObject.SetActive(true);
         vox.OnWorldSpawn();
+        ManVoxelTerrain.TerrainPreLateUpdateEvent.Subscribe(vox.Remote_LatePreUpdate);
+        ManVoxelTerrain.TerrainPostLateUpdateEvent.Subscribe(vox.Remote_LatePostUpdate);
         //vinst.position = pos;
         //ListOfAllActiveChunks.Add(vox);
         return vox;
@@ -364,7 +434,7 @@ public class VoxGenerator : MonoBehaviour
         go.tag = visTag;
 
         var bc = go.AddComponent<BoxCollider>();
-        bc.size = new Vector3(ManWorld.inst.TileSize,10f, ManWorld.inst.TileSize);
+        bc.size = new Vector3(ManWorld.inst.TileSize, 10f, ManWorld.inst.TileSize);
         bc.center = new Vector3(ManWorld.inst.TileSize / 2f, -5f, ManWorld.inst.TileSize / 2f);
         bc.isTrigger = false;
         bc.tag = visTag;

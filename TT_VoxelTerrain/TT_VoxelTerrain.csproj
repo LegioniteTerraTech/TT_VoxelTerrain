@@ -175,6 +175,10 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="CursorChanger.cs" />
+    <Compile Include="KickstartOptions.cs" />
+    <Compile Include="VoxelGlobals.cs" />
+    <Compile Include="VoxTile.cs" />
     <None Include="DiggerTank.cs" />
     <Compile Include="ManVoxelTerrain.cs" />
     <Compile Include="DebugVoxel.cs" />

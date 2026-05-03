@@ -1,12 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using HarmonyLib;
 using UnityEngine;
 using System.Reflection;
 using UnityEngine.Networking;
 using SafeSaves;
+using TerraTechETCUtil;
 
 namespace TT_VoxelTerrain
 {
@@ -20,12 +20,20 @@ namespace TT_VoxelTerrain
     public class ManVoxelTerrain : MonoBehaviour
     {
         public const int TextureMixLayers = 2;//4; - OG was 2
+        public const string ModName = "Voxel Terrain";
 
 
         [SSManagerInst]
         public static ManVoxelTerrain inst;
         [SSaveField]
         public Dictionary<IntVector2, VoxelSerial> VoxelsByTile;
+
+        //internal static HashSet<VoxTerrain> AllTerrain = new HashSet<VoxTerrain>();
+        internal static EventNoParams TerrainPreLateUpdateEvent = new EventNoParams();
+        internal static EventNoParams TerrainPostLateUpdateEvent = new EventNoParams();
+        internal static EventNoParams ProcessBrushPendingEvent = new EventNoParams();
+
+        private static MassShifter TerrainShifter = null;
 
         //Globals
         internal static float MaxTechImpactRadius = 32f;
@@ -40,6 +48,8 @@ namespace TT_VoxelTerrain
 
 
         //Detection variables
+        public static bool isNativeOptionsPresent = false;
+        public static bool isConfigHelperPresent = false;
         public static bool isBiomeInjectorPresent = false; 
 
 
@@ -60,6 +70,110 @@ namespace TT_VoxelTerrain
         // Note to self - finish implementing this to work with PhysicMaterial
         //  Only DynamicFriction does anything to the wheels btw
         internal static Dictionary<byte, PhysicMaterial> biomeFriction = new Dictionary<byte, PhysicMaterial>();
+
+        internal struct MineFXLookup
+        {
+            public SceneryTypes ST;
+            public string Biome;
+        }
+        internal static Dictionary<byte, MineFXLookup> biomeMineEffects = new Dictionary<byte, MineFXLookup>();
+
+        public static ManToolbar.ToolbarToggle TheTerrainToolButton = null;
+        internal static void Init()
+        {
+            if (inst != null)
+                return;
+
+            isConfigHelperPresent = ModStatusChecker.IsConfigHelperPresent;
+            isNativeOptionsPresent = ModStatusChecker.IsNativeOptionsPresent;
+
+            if (ModStatusChecker.LookForMod("Nuterra.Biomes"))
+            {
+                DebugVoxel.Log("VoxelTerrain: Found Biome Injector!  Attempting hookups!");
+                isBiomeInjectorPresent = true;
+            }
+
+            inst = new GameObject("ManVoxelTerrain").AddComponent<ManVoxelTerrain>();
+            VoxelGlobals.FirstSetup();
+            VoxelRez = Mathf.RoundToInt(VoxelGlobals.voxBlockSize * VoxelGlobals.voxBlockResolution * VoxelGlobals.voxChunksPerTile);
+
+            if (ManWorld.inst.TileSize != VoxelRez)
+                throw new InvalidOperationException("Voxel Tile is not equal to Default tile horizontal resolution [" + ManWorld.inst.TileSize +
+                    "],[" + VoxelRez + "].  In order for the voxel terrain to be flush, they must match! NOTIFY LEGIONITE");
+
+            _ = VoxTerrain.sharedMaterialDefault;
+            AddMoreTypes();
+            CursorChanger.AddNewCursors();
+            if (TheTerrainToolButton == null)
+            {
+                TheTerrainToolButton = new ManToolbar.ToolbarToggle(
+                new LocExtStringMod(new Dictionary<LocalisationEnums.Languages, string>()
+                {
+                {LocalisationEnums.Languages.US_English, "Terrain Tool"},
+                }), ResourcesHelper.FetchTexture(ResourcesHelper.GetModContainer(ModName),
+                    "TerrainToolDown").ConvertToSprite(), MassShifter.ToggleState);
+            }
+
+            /*
+            for (int i = 0; PreQueuedCloudPairs > i; i++)
+                VoxTerrain.cloudStorage.Enqueue(MarchingCubes.CreateNewBuffer(VoxTerrain.voxBlockSize));
+            */
+            harmonyInst.PatchAll(Assembly.GetExecutingAssembly());
+            TerrainShifter = new GameObject().AddComponent<MassShifter>();
+            ManWorld.inst.TileManager.TilePopulatedEvent.Subscribe(AddVoxTile);
+            ManWorld.inst.TileManager.TileDepopulatedEvent.Subscribe(RemoveVoxTile);
+            ManWorldTreadmill.inst.OnAfterWorldOriginMoved.Subscribe(OnWorldTreadmill);
+            ManGameMode.inst.ModeSetupEvent.Subscribe(OnModeSetup);
+
+            ManUpdate.inst.AddAction(ManUpdate.Type.FixedUpdate, ManUpdate.Order.First, inst.OnFixedUpdate, 356);
+            ManUpdate.inst.AddAction(ManUpdate.Type.LateUpdate, ManUpdate.Order.Last, inst.OnLateUpdate, 356);
+            //Nuterra.NetHandler.Subscribe<VoxBrushMessage>(VoxBrushMsg, ReceiveVoxBrush, PromptNewVoxBrush);
+
+            if (isNativeOptionsPresent && isConfigHelperPresent)
+            {
+                try
+                {
+                    SafeInitOptions();
+                }
+                catch { }
+            }
+
+            DebugVoxel.Log("VoxelTerrain: Init!");
+        }
+        private static void SafeInitOptions()
+        {
+            try
+            {
+                KickstartOptions.InitHooks();
+            }
+            catch { }
+        }
+        public static void DeInit()
+        {
+            if (inst == null)
+                return;
+            TheTerrainToolButton.Remove();
+            TheTerrainToolButton = null;
+
+            //Nuterra.NetHandler.Unsubscribe<VoxBrushMessage>(VoxBrushMsg, ReceiveVoxBrush, PromptNewVoxBrush);
+            ManUpdate.inst.RemoveAction(ManUpdate.Type.LateUpdate, ManUpdate.Order.Last, inst.OnLateUpdate);
+            ManUpdate.inst.RemoveAction(ManUpdate.Type.FixedUpdate, ManUpdate.Order.First, inst.OnFixedUpdate);
+
+            ManGameMode.inst.ModeSetupEvent.Unsubscribe(OnModeSetup);
+            ManWorldTreadmill.inst.OnAfterWorldOriginMoved.Unsubscribe(OnWorldTreadmill);
+            ManWorld.inst.TileManager.TileDepopulatedEvent.Unsubscribe(RemoveVoxTile);
+            ManWorld.inst.TileManager.TilePopulatedEvent.Unsubscribe(AddVoxTile);
+            Destroy(TerrainShifter);
+            TerrainShifter = null;
+            harmonyInst.UnpatchAll(harmonyInst.Id);
+
+            Destroy(inst);
+            inst = null;
+        }
+
+        public static bool DoMiningFX = true;
+
+        public static float MiningFXLastTime = 0;
 
         public static void OnWorldTreadmill(IntVector3 worldDelta)
         {
@@ -89,11 +203,56 @@ namespace TT_VoxelTerrain
             Biome b;
             try
             {
-                for (int j = 0; j < ManWorld.inst.CurrentBiomeMap.GetNumBiomes(); j++)
+                SpawnHelper.GrabInitList();
+                foreach (var item in new List<Biome>(SpawnHelper.BiomesByName.Values))
                 {
-                    b = ManWorld.inst.CurrentBiomeMap.LookupBiome(i);
+                    b = item;
                     if (b == null) break;
-                    BiomeMapInvLookup.Add(b, i);
+                    //DebugVoxel.Log("VoxelTerrain: " + b.name);
+                    //*
+                    if (!BiomeMapInvLookup.ContainsKey(b))
+                    {
+                        BiomeMapInvLookup.Add(b, i);
+                        switch (b.BiomeType)
+                        {
+                            case BiomeTypes.Grassland:
+                            case BiomeTypes.SaltFlats:
+                            case BiomeTypes.Ice:
+                                if (!biomeMineEffects.ContainsKey(i))
+                                    biomeMineEffects.Add(i, new MineFXLookup()
+                                    {
+                                        Biome = "RockyRidgeBiome",
+                                        ST = SceneryTypes.GrasslandRock,
+                                    });
+                                break;
+                            case BiomeTypes.Desert:
+                                if (!biomeMineEffects.ContainsKey(i))
+                                    biomeMineEffects.Add(i, new MineFXLookup()
+                                    {
+                                        Biome = "DesertBiome",
+                                        ST = SceneryTypes.DesertRock,
+                                    });
+                                break;
+                            case BiomeTypes.Mountains:
+                                if (!biomeMineEffects.ContainsKey(i))
+                                    biomeMineEffects.Add(i, new MineFXLookup()
+                                    {
+                                        Biome = "MountainsBiome",
+                                        ST = SceneryTypes.MountainRock,
+                                    });
+                                break;
+                            case BiomeTypes.Pillars:
+                                if (!biomeMineEffects.ContainsKey(i))
+                                    biomeMineEffects.Add(i, new MineFXLookup()
+                                    {
+                                        Biome = "MountainsBiome",
+                                        ST = SceneryTypes.MountainRock,
+                                    });
+                                break;
+                            default:
+                                break;
+                        }
+                    }//*/
                     i++;
                 }
                 /*
@@ -105,12 +264,19 @@ namespace TT_VoxelTerrain
                     i++;
                 }*/
             }
-            catch { }
+            catch (Exception e)
+            {
+                throw e;
+            }
         }
 
         public const byte fallbackID = 127;
-        public static void AddMoreTypes()
+        private static bool AddedMoreTypes = false;
+        private static void AddMoreTypes()
         {
+            if (AddedMoreTypes)
+                return;
+            AddedMoreTypes = true;
             Texture2D tex = new Texture2D(0, 0);
             Material result = new Material(VoxTerrain.sharedMaterialDefault);
             tex.LoadRawTextureData(Properties.Resources.neontile_png);
@@ -174,52 +340,6 @@ namespace TT_VoxelTerrain
             });
         }
 
-        public static void Init()
-        {
-            inst = new GameObject("ManVoxelTerrain").AddComponent<ManVoxelTerrain>();
-            VoxTerrain.Setup();
-            VoxelRez = Mathf.RoundToInt(VoxTerrain.voxBlockSize * VoxTerrain.voxBlockResolution * VoxTerrain.voxChunksPerTile);
-
-            if (ManWorld.inst.TileSize != VoxelRez)
-                throw new InvalidOperationException("Voxel Tile is not equal to Default tile horizontal resolution [" + ManWorld.inst.TileSize + 
-                    "],[" + VoxelRez + "].  In order for the voxel terrain to be flush, they must match!");
-
-            _ = VoxTerrain.sharedMaterialDefault;
-            AddMoreTypes();
-
-            /*
-            for (int i = 0; PreQueuedCloudPairs > i; i++)
-                VoxTerrain.cloudStorage.Enqueue(MarchingCubes.CreateNewBuffer(VoxTerrain.voxBlockSize));
-            */
-            harmonyInst.PatchAll(Assembly.GetExecutingAssembly());
-            new GameObject().AddComponent<MassShifter>();
-            ManWorld.inst.TileManager.TilePopulatedEvent.Subscribe(AddVoxTile);
-            ManWorld.inst.TileManager.TileDepopulatedEvent.Subscribe(RemoveVoxTile);
-            ManWorldTreadmill.inst.OnAfterWorldOriginMoved.Subscribe(OnWorldTreadmill);
-            ManGameMode.inst.ModeSetupEvent.Subscribe(OnModeSetup);
-            //Nuterra.NetHandler.Subscribe<VoxBrushMessage>(VoxBrushMsg, ReceiveVoxBrush, PromptNewVoxBrush);
-
-
-            if (LookForMod("Nuterra.Biomes"))
-            {
-                DebugVoxel.Log("VoxelTerrain: Found Biome Injector!  Attempting hookups!");
-                isBiomeInjectorPresent = true;
-            }
-            DebugVoxel.Log("VoxelTerrain: Init!");
-        }
-
-
-        public static bool LookForMod(string name)
-        {
-            foreach (var assembly in System.AppDomain.CurrentDomain.GetAssemblies())
-            {
-                if (assembly.FullName.StartsWith(name))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
 
         //private static void SingtonStarted()
         //{
@@ -233,20 +353,30 @@ namespace TT_VoxelTerrain
         {
             if (!IsEnabled)
                 return;
-            var voxGen = tile.Terrain.gameObject.GetComponent<VoxGenerator>();
+            var voxGen = tile.Terrain.GetComponent<VoxGenerator>();
             if (!voxGen)
                 voxGen = tile.Terrain.gameObject.AddComponent<VoxGenerator>();
             voxGen.worldTile = tile;
             voxGen.enabled = true;
         }
+        private static List<VoxTerrain> removeList = new List<VoxTerrain>();
         public static void RemoveVoxTile(WorldTile tile)
         {
-            if (!IsEnabled)
-                return;
-            IsRemoving = true;
-            foreach (var item in tile.StaticParent.GetComponentsInChildren<VoxTerrain>(true))
+            if (tile?.Terrain == null)
             {
-                item.Recycle();
+                DebugVoxel.Assert("TILE OR TERRAIN IS NULL");
+                return;
+            }
+            IsRemoving = true;
+            try
+            {
+                tile.StaticParent?.GetComponentsInChildren(true, removeList);
+                foreach (var item in removeList)
+                    item?.Recycle();
+            }
+            finally
+            {
+                removeList.Clear();
             }
             tile.Terrain.enabled = true;
             tile.Terrain.GetComponent<TerrainCollider>().enabled = true;
@@ -255,54 +385,58 @@ namespace TT_VoxelTerrain
 
         public static float nextTime = 0;
         internal static HashSet<WorldPosition> VoxAltered = new HashSet<WorldPosition>();
-        public void FixedUpdate()
+        private void OnFixedUpdate()
         {
+            ProcessBrushPendingEvent.Send();
             if (nextTime < Time.time)
-            {
                 nextTime = Time.time + 0.2f;
-            }
-            foreach (var item in VoxAltered)
+            try
             {
-                foreach (var item2 in VoxGenerator.IterateNearbyScenery(item.ScenePosition))
+                foreach (var item in VoxAltered)
                 {
-                    Visible vis = item2.visible;
-                    Vector3 centerPos = item2.transform.position;
-                    if (CheckTerrainExistsFast(centerPos, out float height))
-                    {   // In range => Move!
-                        if (vis.damageable)
-                        {
-                            float Delta = Mathf.Abs(height - centerPos.y);
-                            if (Delta > 0.1f)
+                    foreach (var item2 in VoxGenerator.SceneryOverlapCheckFast(item.ScenePosition))//VoxGenerator.SceneryOverlapCheckFastest(item))
+                    {
+                        Visible vis = item2.visible;
+                        Vector3 centerPos = item2.transform.position;
+                        if (CheckTerrainExistsFast(centerPos, out float height))
+                        {   // In range => Move!
+                            if (vis.damageable)
                             {
-                                ManDamage.inst.DealImpactDamage(vis.damageable,
-                                    Delta * resDispTerrainDeltaDmgMulti,
-                                    null, null, centerPos + Vector3.down);
+                                float Delta = Mathf.Abs(height - centerPos.y);
+                                if (Delta > 0.1f)
+                                {
+                                    ManDamage.inst.DealImpactDamage(vis.damageable,
+                                        Delta * resDispTerrainDeltaDmgMulti,
+                                        null, null, centerPos + Vector3.down);
+                                }
                             }
+                            if (item2 != null) // Drop the ResourceDispenser down by the mined distance!
+                                vis.centrePosition = vis.centrePosition.SetY(height);
                         }
-                        if (item != null) // Drop the ResourceDispenser down by the mined distance!
-                            vis.centrePosition = vis.centrePosition.SetY(height);
-                    }
-                    else
-                    {   // No Terrain => uhh ignore
-                        /* // Originally was remove
-                        item.RemoveFromWorld(true);
-                        if (item != null)
-                            vis.centrePosition = vis.centrePosition.SetY(height);
-                        */
+                        else
+                        {   // No Terrain => uhh ignore
+                            /* // Originally was remove
+                            item.RemoveFromWorld(true);
+                            if (item != null)
+                                vis.centrePosition = vis.centrePosition.SetY(height);
+                            */
+                        }
                     }
                 }
+                foreach (var item in VoxAltered)
+                    VoxGenerator.AwakenAndRepositionAffectedRigidbodies(item);
             }
-            VoxAltered.Clear();
+            finally
+            {
+                VoxAltered.Clear();
+            }
         }
-        /*
-        public void LateUpdate()
+        //*
+        private void OnLateUpdate()
         {
-            for (int i = 0; i < AllTerrain.Count; i++)
-                AllTerrain.ElementAt(i).Remote_LatePreUpdate();
-
-            for (int i = 0; i < AllTerrain.Count; i++)
-                AllTerrain.ElementAt(i).Remote_LatePostUpdate();
-        }*/
+            TerrainPreLateUpdateEvent.Send();
+            TerrainPostLateUpdateEvent.Send();
+        }//*/
 
         /*
         public static void SendVoxBrush(VoxBrushMessage message)
@@ -341,14 +475,14 @@ namespace TT_VoxelTerrain
         public static bool CheckTerrainExistsFast(Vector3 scenePos, out float height)
         {
             if (Physics.Raycast(scenePos, Vector3.down, out RaycastHit raycasthit, maxTerrainDetectDelta,
-                VoxTerrain.VoxelTerrainOnlyLayer, QueryTriggerInteraction.Ignore)/* && raycasthit.collider.GetComponentInParent<TerrainGenerator.VoxTerrain>()*/)
+                VoxelGlobals.VoxelTerrainOnlyLayer, QueryTriggerInteraction.Ignore)/* && raycasthit.collider.GetComponentInParent<TerrainGenerator.VoxTerrain>()*/)
             {
                 height = scenePos.y - raycasthit.distance;
                 return true;
             }
             scenePos.y += maxTerrainDetectDelta;
             if (Physics.Raycast(scenePos, Vector3.down, out raycasthit, maxTerrainDetectDelta,
-                VoxTerrain.VoxelTerrainOnlyLayer, QueryTriggerInteraction.Ignore)/* && raycasthit.collider.GetComponentInParent<TerrainGenerator.VoxTerrain>()*/)
+                VoxelGlobals.VoxelTerrainOnlyLayer, QueryTriggerInteraction.Ignore)/* && raycasthit.collider.GetComponentInParent<TerrainGenerator.VoxTerrain>()*/)
             {
                 height = scenePos.y - raycasthit.distance;
                 return true;

@@ -1,198 +1,34 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using UnityEngine;
-using System.Threading.Tasks;
 using System.Collections;
-using Nuterra;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
+using System.Text;
+using System.Threading.Tasks;
+using Nuterra;
+using TerraTechETCUtil;
 using TT_VoxelTerrain;
+using UnityEngine;
 
 namespace TT_VoxelTerrain
 {
-    /// <summary>
-    /// A Voxel tile that represents a cluster of VoxTerrain in relation to a WorldTile
-    /// </summary>
-    internal class VoxTile
-    {
-        private static Dictionary<IntVector2, VoxTile> Tiles = new Dictionary<IntVector2, VoxTile>();
-
-        private static IntVector3 ToInt(Vector3 inPos)
-        {
-            return new IntVector3(
-                Mathf.FloorToInt((inPos.x + 0.01f) / VoxTerrain.voxChunkSize) * VoxTerrain.voxChunkSize,
-                Mathf.FloorToInt((inPos.y + 0.01f) / VoxTerrain.voxChunkSize) * VoxTerrain.voxChunkSize,
-                Mathf.FloorToInt((inPos.z + 0.01f) / VoxTerrain.voxChunkSize) * VoxTerrain.voxChunkSize
-                );
-        }
-
-        internal static void Add(Vector3 scenePos, VoxTerrain vox)
-        {
-            WorldPosition WP = WorldPosition.FromScenePosition(scenePos);
-            vox.chunkCoord = WP.TileCoord;
-            vox.inTilePos = WP.TileRelativePos;
-            if (!Tiles.TryGetValue(WP.TileCoord, out var chunk))
-            {
-                chunk = new VoxTile(WP.TileCoord);
-                Tiles.Add(WP.TileCoord, chunk);
-            }
-            chunk.AddVox(vox.inTilePos, vox);
-        }
-        internal static void Remove(Vector3 scenePos, VoxTerrain vox)
-        {
-            WorldPosition WP = WorldPosition.FromScenePosition(scenePos);
-            if (Tiles.TryGetValue(vox.chunkCoord, out var chunk) &&
-                chunk.RemoveVox(vox.inTilePos))
-            {
-                if (!chunk.blocks.Any())
-                    Tiles.Remove(vox.chunkCoord);
-                return;
-            }
-            DebugVoxel.Log("failed to get vox at [" + WP.TileCoord.x + ", " +
-                WP.TileCoord.y + "], doing it the long way");
-            if (Tiles.TryGetValue(vox.chunkCoord, out chunk))
-            {
-                chunk.RemoveVoxSLOW(vox);
-                if (!chunk.blocks.Any())
-                    Tiles.Remove(vox.chunkCoord);
-            }
-        }
-        internal static VoxTerrain Lookup(Vector3 scenePos)
-        {
-            WorldPosition WP = WorldPosition.FromScenePosition(scenePos);
-            if (Tiles.TryGetValue(WP.TileCoord, out var chunk))
-                return chunk.LookupVox(WP.TileRelativePos);
-            return null;
-        }
-        internal static VoxTerrain LookupOrCreate(Vector3 scenePos)
-        {
-            WorldPosition WP = WorldPosition.FromScenePosition(scenePos);
-            if (!Tiles.TryGetValue(WP.TileCoord, out var chunk))
-            {
-                chunk = new VoxTile(WP.TileCoord);
-                Tiles.Add(WP.TileCoord, chunk);
-            }
-            return chunk.LookupOrCreateVox(WP.TileRelativePos);
-        }
-
-        public readonly IntVector2 worldCoord;
-        public Dictionary<IntVector3, VoxTerrain> blocks = new Dictionary<IntVector3, VoxTerrain>();
-        public VoxTile(IntVector2 coordWorld)
-        {
-            worldCoord = coordWorld;
-        }
-        private void AddVox(Vector3 inPos, VoxTerrain vox) => blocks.Add(ToInt(inPos), vox);
-        private bool RemoveVox(Vector3 inPos) => blocks.Remove(ToInt(inPos));
-        private void RemoveVoxSLOW(VoxTerrain vox)
-        {
-            try
-            {
-                blocks.Remove(blocks.ElementAt(blocks.Values.ToList().IndexOf(vox)).Key);
-            }
-            catch
-            {
-                DebugVoxel.Assert("VoxelTerrain: fallback failed to remove vox from lookup!  We will now be out of sync!");
-            }
-        }
-        private VoxTerrain LookupVox(Vector3 inPos)
-        {
-            blocks.TryGetValue(ToInt(inPos), out VoxTerrain vox);
-            return vox;
-        }
-        public VoxTerrain LookupOrCreateVox(Vector3 inPos)
-        {
-            IntVector3 pos = ToInt(inPos);
-            if (blocks.TryGetValue(pos, out VoxTerrain vox))
-                return vox;
-            vox = VoxGenerator.GenerateVoxPart(new WorldPosition(worldCoord, pos).ScenePosition);
-            return vox;
-        }
-    }
     /// <summary> A Vox Chunk </summary>
     internal class VoxTerrain : MonoBehaviour, IWorldTreadmill
     {
-        public static LayerMask VoxelTerrainOnlyLayer = LayerMask.GetMask(LayerMask.LayerToName(Globals.inst.layerTerrain));
-        /// <summary>
-        /// Resolution of each voxel block.  This determines how many CloudPairs are within.
-        /// </summary>
-        public const float voxBlockResolution = 6;
-        //3.0f; //! Half of a terrain vertex scale
-        //public const float voxelSize = 8; //3.0f; //! Half of a terrain vertex scale
-
-        /// <summary>
-        /// Number of chunks to subdivide the terrain in to.  Higher number means finer accuracy
-        /// </summary>
-        internal const int voxChunksPerTile = 4;//8;
-        // 4 - safest for fastest loading speed
-
-        /// <summary>
-        /// Size of each voxel
-        /// - AUTO-SET in Setup()
-        /// </summary>
-        public static int voxBlockSize = -1;
-        /// <summary>
-        /// Size of a chunk in world meter units
-        /// - AUTO-SET in Setup()
-        /// </summary>
-        public static int voxChunkSize = -1;
-        /// <summary>
-        /// The center of each voxel
-        /// AUTO-SET in Setup()
-        /// </summary>
-        public static Vector3 voxBlockCenterOffset = Vector3.zero;
-        public static void Setup()
-        {
-            voxChunkSize = Mathf.RoundToInt(ManWorld.inst.TileSize) / voxChunksPerTile;
-            voxBlockSize = Mathf.RoundToInt(voxChunkSize / voxBlockResolution);
-            voxBlockCenterOffset = Vector3.one * (voxChunkSize / 2f);
-            BleedWrap = Mathf.RoundToInt(voxChunkSize / voxBlockResolution);
-        }
-        public static Vector3 GetVoxCenter(Vector3 ScenePos)
-        {
-            return new Vector3(Mathf.Floor(ScenePos.x / voxBlockSize) * voxBlockSize,
-                Mathf.Floor(ScenePos.y / voxBlockSize) * voxBlockSize,
-                Mathf.Floor(ScenePos.z / voxBlockSize) * voxBlockSize) + voxBlockCenterOffset;
-        }
-        public static bool Within(Vector3 min, Vector3 ScenePosTarget, float size)
-        {
-            Vector3 max = min + (Vector3.one * size);
-            return min.x <= ScenePosTarget.x && max.x >= ScenePosTarget.x &&
-                min.y <= ScenePosTarget.y && max.y >= ScenePosTarget.y &&
-                min.z <= ScenePosTarget.z && max.z >= ScenePosTarget.z;
-        }
-        public static bool WithinVox(Vector3 ScenePos, Vector3 ScenePosTarget)
-        {
-            Vector3 min = new Vector3(Mathf.Floor(ScenePos.x / voxBlockSize) * voxBlockSize,
-                Mathf.Floor(ScenePos.y / voxBlockSize) * voxBlockSize,
-                Mathf.Floor(ScenePos.z / voxBlockSize) * voxBlockSize);
-            Vector3 max = min + (Vector3.one * voxBlockSize);
-            return min.x <= ScenePosTarget.x && max.x >= ScenePosTarget.x &&
-                min.y <= ScenePosTarget.y && max.y >= ScenePosTarget.y &&
-                min.z <= ScenePosTarget.z && max.z >= ScenePosTarget.z;
-        }
-        public static bool WithinVoxByOrigin(Vector3 voxOrigin, Vector3 ScenePosTarget)
-        {
-            Vector3 max = voxOrigin + (Vector3.one * voxBlockSize);
-            return voxOrigin.x <= ScenePosTarget.x && max.x >= ScenePosTarget.x &&
-                voxOrigin.y <= ScenePosTarget.y && max.y >= ScenePosTarget.y &&
-                voxOrigin.z <= ScenePosTarget.z && max.z >= ScenePosTarget.z;
-        }
-
 
         //internal static Queue<CloudPair[,,]> cloudStorage = new Queue<CloudPair[,,]>();
 
 
         internal static PropertyInfo Visible_damageable;
 
-
+        public ItemTypeInfo OurType = VoxelGlobals.GetNewVoxelTypeInfo;
         public WorldTile parent;
         public IntVector2 chunkCoord;
         public IntVector3 inTilePos;
         public bool BufferSet = false;
         public Vector3 SceneOrigin => transform.position;
-        public Vector3 SceneCenter => transform.position + voxBlockCenterOffset;
+        public Vector3 SceneCenter => transform.position + VoxelGlobals.voxBlockCenterOffset;
 
 
         private void ThrowOnIllegalRecycle(Visible vis)
@@ -235,17 +71,21 @@ namespace TT_VoxelTerrain
             mf = GetComponentInChildren<MeshFilter>();
             meshCol = GetComponentInChildren<MeshCollider>();
             mesh = new Mesh();
-            mesh.MarkDynamic();
+            //mesh.MarkDynamic(); // DO NOT MARK DYNAMIC - BORKS EVERYTHING
+            mesh.Clear();
+            mesh2 = new Mesh();
+            mesh2.Clear();
             DebugVoxel.Info("VoxelTerrain: Absorbed children");
 
             mcubes = new MarchingCubes() { interpolate = true };//, sampleProc = Sample };
+            nsolve = new NormalSolver();
             DebugVoxel.Info("VoxelTerrain: Shunted Voxel Terrain generation");
             PendingBleedBrushEffects = new List<BrushEffect>();
-            PendingBleedBrush = new List<ManDamage.DamageInfo>();
+            PendingBleedBrush = new Queue<ManDamage.DamageInfo>();
             if (Buffer == null)
             {
                 DebugVoxel.Info("VoxelTerrain: Added buffer");
-                Buffer = MarchingCubes.CreateNewBuffer(voxBlockSize);
+                Buffer = MarchingCubes.CreateNewBuffer(VoxelGlobals.voxBlockSize);
             }
             BufferSet = false;
             transform.localScale = Vector3.one;
@@ -265,8 +105,8 @@ namespace TT_VoxelTerrain
                 if (parent != null)
                     DebugVoxel.Assert("For some reason parent was set - when we are pooling we SHOULDN'T have a parent!");
                 if (Buffer == null)
-                    Buffer = MarchingCubes.CreateNewBuffer(voxBlockSize);
-                Reset();
+                    Buffer = MarchingCubes.CreateNewBuffer(VoxelGlobals.voxBlockSize);
+                OnReset();
             }
             catch (Exception E)
             {
@@ -304,10 +144,9 @@ namespace TT_VoxelTerrain
                         throw new NullReferenceException("Voxel Terrain: For some reason parent worldTile is NOT LOADED");
                 }
                 if (Buffer == null)
-                    Buffer = MarchingCubes.CreateNewBuffer(voxBlockSize);
+                    Buffer = MarchingCubes.CreateNewBuffer(VoxelGlobals.voxBlockSize);
                 Singleton.Manager<ManWorldTreadmill>.inst.AddListener(this);
-                Reset();
-                voxFriendLookup.Clear();
+                OnReset();
                 voxFriendLookup.Add(IntVector3.zero, this);
                 if (parent == null)
                 {
@@ -334,7 +173,7 @@ namespace TT_VoxelTerrain
                     //DebugVoxel.LogError($"{V.type}-ItemType {V.ID}-ID {V.name}-name - FAILED");
                 }
                 */
-                GetComponent<Visible>().m_ItemType = new ItemTypeInfo(VoxGenerator.ObjectTypeVoxelChunk, 0);
+                GetComponent<Visible>().m_ItemType = VoxelGlobals.GetNewVoxelTypeInfo;
                 mr.enabled = false;
                 meshCol.enabled = false;
                 enabled = true;
@@ -350,7 +189,7 @@ namespace TT_VoxelTerrain
             }
         }
 
-        internal void Reset()
+        internal void OnReset()
         {
             Dirty = true;
             Modified = false;
@@ -380,9 +219,12 @@ namespace TT_VoxelTerrain
             }
             Singleton.Manager<ManWorldTreadmill>.inst.RemoveListener(this);
             VoxTile.Remove(transform.position, this);
+            ManVoxelTerrain.TerrainPostLateUpdateEvent.Unsubscribe(Remote_LatePostUpdate);
+            ManVoxelTerrain.TerrainPreLateUpdateEvent.Unsubscribe(Remote_LatePreUpdate);
             transform.parent = null;
             parent = null;
-            Reset();
+            voxFriendLookup.Clear();
+            OnReset();
             mr.enabled = false;
             meshCol.enabled = false;
             //DebugVoxel.Log("Recycling Voxel Terrain:"); DebugVoxel.Log(new System.Diagnostics.StackTrace().ToString());
@@ -398,10 +240,10 @@ namespace TT_VoxelTerrain
 
         static byte[] GetBytes(CloudPair[,,] value)
         {
-            int sizep1 = Mathf.RoundToInt(voxChunkSize / voxBlockResolution) + 1;
+            int sizep1 = Mathf.RoundToInt(VoxelGlobals.voxChunkSize / VoxelGlobals.voxBlockResolution) + 1;
 
             int size = sizep1 * sizep1 * sizep1 * 3;
-            byte[] array = new byte[size];
+            byte[] array = new byte[size]; // ONLY WHEN SAVING
 
             int c = 0;
             for (int j = 0; j < sizep1; j++)
@@ -421,7 +263,7 @@ namespace TT_VoxelTerrain
         }
         void AssignFromBytes(CloudPair[,,] buffer, byte[] array)
         {
-            int sizep1 = Mathf.RoundToInt(voxChunkSize / voxBlockResolution) + 1;
+            int sizep1 = Mathf.RoundToInt(VoxelGlobals.voxChunkSize / VoxelGlobals.voxBlockResolution) + 1;
 
             int size = sizep1 * sizep1 * sizep1 * 2;
             if (buffer.GetLength(0) != sizep1 || buffer.GetLength(1) != sizep1 || buffer.GetLength(2) != sizep1)
@@ -444,7 +286,7 @@ namespace TT_VoxelTerrain
         }
         CloudPair[,,] FromBytes(byte[] array)
         {
-            int sizep1 = Mathf.RoundToInt(voxChunkSize / voxBlockResolution) + 1;
+            int sizep1 = Mathf.RoundToInt(VoxelGlobals.voxChunkSize / VoxelGlobals.voxBlockResolution) + 1;
 
             int size = sizep1 * sizep1 * sizep1 * 2;
             CloudPair[,,] value = new CloudPair[sizep1, sizep1, sizep1];
@@ -500,10 +342,6 @@ namespace TT_VoxelTerrain
         #endregion
 
         public Dictionary<IntVector3, VoxTerrain> voxFriendLookup;
-        /// <summary>
-        /// AUTO-SET in Setup()
-        /// </summary>
-        public static int BleedWrap = 2;
 
         public CloudPair[,,] Buffer = null;
         public enum BakeState
@@ -521,13 +359,15 @@ namespace TT_VoxelTerrain
         public MeshRenderer mr;
         public MeshCollider meshCol;
         public Mesh mesh;
+        public Mesh mesh2;
         public Damageable dmg;
         public byte terrainType = 0;
         //System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
         MarchingCubes mcubes;
+        NormalSolver nsolve;
         List<Vector3> normalcache;
         List<BrushEffect> PendingBleedBrushEffects;
-        List<ManDamage.DamageInfo> PendingBleedBrush;
+        Queue<ManDamage.DamageInfo> PendingBleedBrush;
 
 
         internal static Dictionary<byte, Material> _matcache = new Dictionary<byte, Material>();
@@ -782,9 +622,9 @@ namespace TT_VoxelTerrain
         {
             new Task(delegate
             {
-                mcubes.MarchChunk(transform.position, voxBlockSize, voxBlockResolution, voxBlockResolution, Buffer);
+                mcubes.MarchChunk(transform.position, VoxelGlobals.voxBlockSize, VoxelGlobals.voxBlockResolution, VoxelGlobals.voxBlockResolution, Buffer);
 
-                normalcache = NormalSolver.RecalculateNormals(mcubes.GetIndices(), mcubes.GetVertices(), 70);
+                normalcache = nsolve.RecalculateNormals(mcubes.GetIndices(), mcubes.GetVertices(), 70);
 
                 BakeStatus = BakeState.Meshing;
             }).Start();
@@ -793,16 +633,13 @@ namespace TT_VoxelTerrain
         private int VoxelsAbove;
         internal void Remote_LatePreUpdate()
         {
-        }
-        internal void LatePreUpdate()
-        {
             try
             {
                 if (parent == null)
                 {
                     if (!AutoSetTile())
                         return;
-                    DebugVoxel.Log("VoxTerrain was adopted...");
+                    DebugVoxel.Info("VoxTerrain was adopted...");
                 }
                 if (BakeStatus == BakeState.Finalization || DirtyPartial)
                 {
@@ -813,11 +650,11 @@ namespace TT_VoxelTerrain
                         mesh.SetNormals(normalcache);
                         //normalcache.Clear();
 
+                        mf.sharedMesh = mesh;
+                        mr.enabled = true;
                         meshCol.sharedMesh = mesh;
                         meshCol.contactOffset = 0.001f;
                         meshCol.enabled = true;
-                        mf.sharedMesh = mesh;
-                        mr.enabled = true;
 
                         Invoke("HideTerrain", 0.1f);
 
@@ -963,7 +800,7 @@ namespace TT_VoxelTerrain
                                 foreach (var vertI in GetTriVerts(otherIndices, triIndex))
                                 {
                                     error = 5;
-                                    Vector3 vert = otherVerts[vertI] - (direction * voxChunkSize);
+                                    Vector3 vert = otherVerts[vertI] - (direction * VoxelGlobals.voxChunkSize);
                                     Vector3 vertSnap = vert;
                                     for (int i = 0; i < 3; i++)
                                         vertSnap[i] = (int)(vertSnap[i] * 100000) / 100000f;
@@ -988,7 +825,7 @@ namespace TT_VoxelTerrain
                     error = 6;
                     if (!((float)tris.Count).Approximately(indices.Count / 3f))
                         throw new Exception("tris [" + tris.Count + "] mismatch indices 1/3 [" + indices.Count + "]");
-                    var norms = NormalSolver.RecalculateNormals(indices.ToArray(), verts.ToArray(), 70);
+                    var norms = nsolve.RecalculateNormals(indices, verts, 70);
                     if (norms.Count != tris.Count)
                         throw new Exception("tris [" + tris.Count + "] mismatch norms [" + norms.Count + "]");
                     error = 7;
@@ -1029,15 +866,13 @@ namespace TT_VoxelTerrain
             }
             return true;
         }
-        
+
+        private static Dictionary<int, Material[]> quickMats = new Dictionary<int, Material[]>();
+
         internal void Remote_LatePostUpdate()
-        {
-        }
-        internal void LateUpdate()
         {
             try
             {
-                LatePreUpdate();
                 if (BakeStatus == BakeState.Meshing)
                 {
                     if (transform.lossyScale.x <= 0)
@@ -1047,7 +882,14 @@ namespace TT_VoxelTerrain
                     if (transform.lossyScale.z <= 0)
                         DebugVoxel.Log("Voxel Terrain: For some reason our z scale was negative or zero");
 
-                    mesh = new Mesh();
+                    var temp = mesh;
+                    mesh = mesh2;
+                    mesh2 = temp;
+
+                    if (mesh == null)
+                        mesh = new Mesh();
+                    mesh.Clear();
+
                     //mesh.vertices = mcubes.GetVertices().ToArray();
                     mesh.SetVertices(mcubes.GetVertices());
 
@@ -1059,7 +901,11 @@ namespace TT_VoxelTerrain
 
                     mesh.RecalculateBounds();
 
-                    Material[] mats = new Material[mcubes._indices.Count];
+                    if (!quickMats.TryGetValue(mcubes._indices.Count, out Material[] mats))
+                    {
+                        mats = new Material[mcubes._indices.Count];
+                        quickMats.Add(mcubes._indices.Count, mats);
+                    }
 
                     int i = 0;
                     mesh.subMeshCount = mcubes._indices.Count;
@@ -1069,7 +915,6 @@ namespace TT_VoxelTerrain
                         mats[i] = GetMaterialFromBiome(pair.Key);
                         i++;
                     }
-
                     mr.sharedMaterials = mats;
 
                     if (mcubes._indices.Any())
@@ -1210,7 +1055,7 @@ namespace TT_VoxelTerrain
                                     new Task(delegate
                                     {
                                         MarchingCubes.SetBufferFromTerrain(Buffer, terrainDataFast, splatDataFast, parent, voxelOffset,
-                                        voxBlockSize, voxBlockResolution,
+                                        VoxelGlobals.voxBlockSize, VoxelGlobals.voxBlockResolution,
                                         out VoxelsBelow, out VoxelsAbove);
                                         FindVoxels = true;
                                     }).Start();
@@ -1221,7 +1066,7 @@ namespace TT_VoxelTerrain
                                     if (Buffer == null)
                                         DebugVoxel.Assert("Voxel Terrain: Buffer is NULL");
                                     DebugVoxel.Info("Generating voxels RandD");
-                                    mcubes.SetBuffer(Buffer, voxelOffset, voxBlockSize, voxBlockResolution);
+                                    mcubes.SetBuffer(Buffer, voxelOffset, VoxelGlobals.voxBlockSize, VoxelGlobals.voxBlockResolution);
                                     break;
                                 default:
                                     break;
@@ -1242,19 +1087,28 @@ namespace TT_VoxelTerrain
             }
         }
 
-        internal void FixedUpdate()
+        internal void Remote_FixedUpdateBrush()
         {
             if (!Processing)
             {
-                if (PendingBleedBrush.Count != 0)
+                if (PendingBleedBrush.Any())
                 {
                     while (0 < PendingBleedBrush.Count)
                     {
-                        if (!BufferSet) break;
-                        ProcessDamageEvent(PendingBleedBrush[0], 0x00);
-                        PendingBleedBrush.RemoveAt(0);
+                        if (!BufferSet)
+                            break;
+                        try
+                        {
+                            ProcessDamageEvent(PendingBleedBrush.Dequeue(), 0x00);
+                        }
+                        catch (Exception e)
+                        {
+                            DebugVoxel.FatalError("Failed to handle voxel damage event at " + chunkCoord.ToString() +
+                                ", " + inTilePos.ToString() + " - " + e);
+                        }
                     }
                 }
+                ManVoxelTerrain.ProcessBrushPendingEvent.Unsubscribe(Remote_FixedUpdateBrush);
             }
         }
 
@@ -1281,7 +1135,7 @@ namespace TT_VoxelTerrain
 
         private static float PointInterpolate(float Radius, float Distance)
         {
-            return Mathf.Min(Mathf.Max(Radius - Distance, 0), voxBlockResolution) / voxBlockResolution;
+            return Mathf.Min(Mathf.Max(Radius - Distance, 0), VoxelGlobals.voxBlockResolution) / VoxelGlobals.voxBlockResolution;
         }
 
         /// <summary>
@@ -1406,7 +1260,7 @@ namespace TT_VoxelTerrain
         public void SphereDeltaVoxTerrain(Vector3 ScenePos, float Radius, float Change, Vector3 DigNormal, byte Terrain = byte.MaxValue)
         {
             this.DigNormal = DigNormal;
-            var LocalPos = (ScenePos - transform.position) / voxBlockResolution;
+            var LocalPos = (ScenePos - transform.position) / VoxelGlobals.voxBlockResolution;
             var ContactTerrain = Terrain == byte.MaxValue ? Buffer[Mathf.RoundToInt(LocalPos.x), Mathf.RoundToInt(LocalPos.y), Mathf.RoundToInt(LocalPos.z)].Terrain : Terrain;
             if (Change > 0)
             {
@@ -1423,8 +1277,8 @@ namespace TT_VoxelTerrain
         public void SphereLevelVoxTerrain_BROKEN(Vector3 ScenePos, Vector3 startPos, float Radius, float Change, Vector3 DigNormal, byte Terrain = byte.MaxValue)
         {
             this.DigNormal = DigNormal;
-            var LocalPos = (ScenePos - transform.position) / voxBlockResolution;
-            var LocalStartPos = (startPos - transform.position) / voxBlockResolution;
+            var LocalPos = (ScenePos - transform.position) / VoxelGlobals.voxBlockResolution;
+            var LocalStartPos = (startPos - transform.position) / VoxelGlobals.voxBlockResolution;
             var ContactTerrain = Terrain == byte.MaxValue ? Buffer[Mathf.RoundToInt(LocalStartPos.x), Mathf.RoundToInt(LocalStartPos.y), Mathf.RoundToInt(LocalStartPos.z)].Terrain : Terrain;
             if (Change > 0)
             {
@@ -1448,7 +1302,7 @@ namespace TT_VoxelTerrain
         public void SemiSphereDeltaVoxTerrain(Vector3 ScenePos, float Radius, float Change, Vector3 DigNormal, byte Terrain = byte.MaxValue)
         {
             this.DigNormal = DigNormal;
-            var LocalPos = (ScenePos - transform.position) / voxBlockResolution;
+            var LocalPos = (ScenePos - transform.position) / VoxelGlobals.voxBlockResolution;
             var ContactTerrain = Terrain == byte.MaxValue ? Buffer[Mathf.RoundToInt(LocalPos.x), Mathf.RoundToInt(LocalPos.y), Mathf.RoundToInt(LocalPos.z)].Terrain : Terrain;
             if (Change > 0)
             {
@@ -1464,8 +1318,8 @@ namespace TT_VoxelTerrain
         public void SemiSphereLevelVoxTerrain(Vector3 ScenePos, Vector3 startPos, float Radius, float Change, Vector3 DigNormal, byte Terrain = byte.MaxValue)
         {
             this.DigNormal = DigNormal;
-            var LocalPos = (ScenePos - transform.position) / voxBlockResolution;
-            var LocalStartPos = (startPos - transform.position) / voxBlockResolution;
+            var LocalPos = (ScenePos - transform.position) / VoxelGlobals.voxBlockResolution;
+            var LocalStartPos = (startPos - transform.position) / VoxelGlobals.voxBlockResolution;
             var ContactTerrain = Terrain == byte.MaxValue ? Buffer[Mathf.RoundToInt(LocalStartPos.x), Mathf.RoundToInt(LocalStartPos.y), Mathf.RoundToInt(LocalStartPos.z)].Terrain : Terrain;
             if (Change > 0)
             {
@@ -1478,13 +1332,13 @@ namespace TT_VoxelTerrain
         }
         public IEnumerable<VoxTerrain> IterateVoxTerrain(Vector3 ScenePos, float Radius)
         {
-            var LocalPos = (ScenePos - transform.position) / voxBlockResolution;
-            int xmax = Mathf.CeilToInt((LocalPos.x + Radius + 2) / BleedWrap),
-                ymax = Mathf.CeilToInt((LocalPos.y + Radius + 2) / BleedWrap),
-                zmax = Mathf.CeilToInt((LocalPos.z + Radius + 2) / BleedWrap);
-            for (int x = Mathf.FloorToInt((LocalPos.x - Radius - 2) / BleedWrap); x <= xmax; x++)
-                for (int y = Mathf.FloorToInt((LocalPos.y - Radius - 2) / BleedWrap); y <= ymax; y++)
-                    for (int z = Mathf.FloorToInt((LocalPos.z - Radius - 2) / BleedWrap); z <= zmax; z++)
+            var LocalPos = (ScenePos - transform.position) / VoxelGlobals.voxBlockResolution;
+            int xmax = Mathf.CeilToInt((LocalPos.x + Radius + 2) / VoxelGlobals.BleedWrap),
+                ymax = Mathf.CeilToInt((LocalPos.y + Radius + 2) / VoxelGlobals.BleedWrap),
+                zmax = Mathf.CeilToInt((LocalPos.z + Radius + 2) / VoxelGlobals.BleedWrap);
+            for (int x = Mathf.FloorToInt((LocalPos.x - Radius - 2) / VoxelGlobals.BleedWrap); x <= xmax; x++)
+                for (int y = Mathf.FloorToInt((LocalPos.y - Radius - 2) / VoxelGlobals.BleedWrap); y <= ymax; y++)
+                    for (int z = Mathf.FloorToInt((LocalPos.z - Radius - 2) / VoxelGlobals.BleedWrap); z <= zmax; z++)
                     {
                         VoxTerrain vox = FindFriend(new Vector3(x, y, z));
                         if (vox != null)
@@ -1493,13 +1347,13 @@ namespace TT_VoxelTerrain
         }
         public IEnumerable<VoxTerrain> IterateAndCreateVoxTerrain(Vector3 ScenePos, float Radius)
         {
-            var LocalPos = (ScenePos - transform.position) / voxBlockResolution;
-            int xmax = Mathf.CeilToInt((LocalPos.x + Radius + 2) / BleedWrap),
-                ymax = Mathf.CeilToInt((LocalPos.y + Radius + 2) / BleedWrap),
-                zmax = Mathf.CeilToInt((LocalPos.z + Radius + 2) / BleedWrap);
-            for (int x = Mathf.FloorToInt((LocalPos.x - Radius - 2) / BleedWrap); x <= xmax; x++)
-                for (int y = Mathf.FloorToInt((LocalPos.y - Radius - 2) / BleedWrap); y <= ymax; y++)
-                    for (int z = Mathf.FloorToInt((LocalPos.z - Radius - 2) / BleedWrap); z <= zmax; z++)
+            var LocalPos = (ScenePos - transform.position) / VoxelGlobals.voxBlockResolution;
+            int xmax = Mathf.CeilToInt((LocalPos.x + Radius + 2) / VoxelGlobals.BleedWrap),
+                ymax = Mathf.CeilToInt((LocalPos.y + Radius + 2) / VoxelGlobals.BleedWrap),
+                zmax = Mathf.CeilToInt((LocalPos.z + Radius + 2) / VoxelGlobals.BleedWrap);
+            for (int x = Mathf.FloorToInt((LocalPos.x - Radius - 2) / VoxelGlobals.BleedWrap); x <= xmax; x++)
+                for (int y = Mathf.FloorToInt((LocalPos.y - Radius - 2) / VoxelGlobals.BleedWrap); y <= ymax; y++)
+                    for (int z = Mathf.FloorToInt((LocalPos.z - Radius - 2) / VoxelGlobals.BleedWrap); z <= zmax; z++)
                         yield return FindOrCreateFriend(new Vector3(x, y, z));
         }
 
@@ -1518,7 +1372,7 @@ namespace TT_VoxelTerrain
             /*
             // Doesn't seem to do anything
             if (pre.Density > 0 && post.Density <= 0) 
-                SpawnChunk(new Vector3(x, y, z) * voxBlockResolution + transform.position);
+                SpawnChunk(new Vector3(x, y, z) * VoxelGlobals.voxBlockResolution + transform.position);
             */
             Buffer[x, y, z] = post;
             return post.Density - pre.Density;
@@ -1528,7 +1382,7 @@ namespace TT_VoxelTerrain
             Func<float, float, CloudPair[,,], Vector3, Vector3, IntVector3, byte, int> ModifyBuffer, byte Terrain)
         {
             MarkForSceneryCheck();
-            var LocalPos = (ScenePos - transform.position) / voxBlockResolution;
+            var LocalPos = (ScenePos - transform.position) / VoxelGlobals.voxBlockResolution;
             if (Processing || !BufferSet)
                 PendingBleedBrushEffects.Add(new BrushEffect(LocalPos, digNormal, Radius, Change, ModifyBuffer, Terrain));
             else
@@ -1552,9 +1406,9 @@ namespace TT_VoxelTerrain
         {
             int Result = 0;
             // Get the furthest reaching CloudPairs this brush operation can reach!
-            int zmax = Mathf.Min(Mathf.CeilToInt(LocalPos.z + Radius), BleedWrap + 1),
-                ymax = Mathf.Min(Mathf.CeilToInt(LocalPos.y + Radius), BleedWrap + 1),
-                xmax = Mathf.Min(Mathf.CeilToInt(LocalPos.x + Radius), BleedWrap + 1);
+            int zmax = Mathf.Min(Mathf.CeilToInt(LocalPos.z + Radius), VoxelGlobals.BleedWrap + 1),
+                ymax = Mathf.Min(Mathf.CeilToInt(LocalPos.y + Radius), VoxelGlobals.BleedWrap + 1),
+                xmax = Mathf.Min(Mathf.CeilToInt(LocalPos.x + Radius), VoxelGlobals.BleedWrap + 1);
             for (int z = Mathf.Max(0, Mathf.FloorToInt(LocalPos.z - Radius)); z < zmax; z++)
                 for (int y = Mathf.Max(0, Mathf.FloorToInt(LocalPos.y - Radius)); y < ymax; y++)
                     for (int x = Mathf.Max(0, Mathf.FloorToInt(LocalPos.x - Radius)); x < xmax; x++)
@@ -1565,6 +1419,15 @@ namespace TT_VoxelTerrain
                         Result += delta;
                     }
             Modified |= Dirty;
+            if (Dirty)
+            {
+                if (ManVoxelTerrain.DoMiningFX && ManVoxelTerrain.MiningFXLastTime < Time.time)
+                {
+                    ManVoxelTerrain.MiningFXLastTime = Time.time + 0.25f;
+                    if (Change < 0 && ManVoxelTerrain.biomeMineEffects.TryGetValue(Terrain, out var type))
+                        SpawnHelper.SpawnResourceNodeExplosion(SceneOrigin + LocalPos, type.ST, type.Biome);
+                }
+            }
             return Result;
         }
         private void BrushModifyBuffer(BrushEffect b)
@@ -1574,9 +1437,9 @@ namespace TT_VoxelTerrain
         private IEnumerable<IntVector3> IterateInBuffer(IntVector3 LocalPos, float Radius)
         {
             // Get the furthest reaching CloudPairs this brush operation can reach!
-            int zmax = Mathf.Min(Mathf.CeilToInt(LocalPos.z + Radius), BleedWrap + 1),
-                ymax = Mathf.Min(Mathf.CeilToInt(LocalPos.y + Radius), BleedWrap + 1),
-                xmax = Mathf.Min(Mathf.CeilToInt(LocalPos.x + Radius), BleedWrap + 1);
+            int zmax = Mathf.Min(Mathf.CeilToInt(LocalPos.z + Radius), VoxelGlobals.BleedWrap + 1),
+                ymax = Mathf.Min(Mathf.CeilToInt(LocalPos.y + Radius), VoxelGlobals.BleedWrap + 1),
+                xmax = Mathf.Min(Mathf.CeilToInt(LocalPos.x + Radius), VoxelGlobals.BleedWrap + 1);
             for (int z = Mathf.Max(0, Mathf.FloorToInt(LocalPos.z - Radius)); z < zmax; z++)
                 for (int y = Mathf.Max(0, Mathf.FloorToInt(LocalPos.y - Radius)); y < ymax; y++)
                     for (int x = Mathf.Max(0, Mathf.FloorToInt(LocalPos.x - Radius)); x < xmax; x++)
@@ -1586,7 +1449,7 @@ namespace TT_VoxelTerrain
         private VoxTerrain FindFriend_exp(Vector3 Direction)
         {
             return VoxTile.Lookup(transform.position + (Direction *
-                voxChunkSize));
+                VoxelGlobals.voxChunkSize));
         }
         private VoxTerrain FindFriend(Vector3 Direction)
         {
@@ -1594,7 +1457,7 @@ namespace TT_VoxelTerrain
             if (voxFriendLookup.TryGetValue(Direction, out fVox))
             {
                 if (fVox != null && fVox.enabled && fVox.transform.position - 
-                    transform.position == Direction * voxChunkSize)
+                    transform.position == Direction * VoxelGlobals.voxChunkSize)
                     return fVox;
                 voxFriendLookup.Remove(Direction);
             }
@@ -1603,10 +1466,10 @@ namespace TT_VoxelTerrain
             //   Although it is Grid-aligned, should never miss in nature but
             //    this is after all, a collider collision check..
             fVox = VoxGenerator.OverlapCheckFast(transform.position +
-                Direction * voxChunkSize + voxBlockCenterOffset, voxChunkSize / 8f);
+                Direction * VoxelGlobals.voxChunkSize + VoxelGlobals.voxBlockCenterOffset, VoxelGlobals.voxChunkSize / 8f);
             */
             fVox = VoxTile.Lookup(transform.position + (Direction *
-                voxChunkSize) + voxBlockCenterOffset);
+                VoxelGlobals.voxChunkSize) + VoxelGlobals.voxBlockCenterOffset);
             if (fVox)
                 voxFriendLookup.Add(Direction, fVox);
             return fVox;
@@ -1615,7 +1478,7 @@ namespace TT_VoxelTerrain
         {
             /*
             return VoxChunk.LookupOrCreate(transform.position + (Direction *
-                voxChunkSize));
+                VoxelGlobals.voxChunkSize));
             // */
             //*
             VoxTerrain fVox = FindFriend(Direction);
@@ -1630,9 +1493,9 @@ namespace TT_VoxelTerrain
 
         private VoxTerrain CreateFriend(IntVector3 Direction, float Fill)
         {
-            var pos = transform.position + Direction * voxChunkSize;
+            var pos = transform.position + Direction * VoxelGlobals.voxChunkSize;
             VoxTerrain newVox = VoxGenerator.GenerateVoxPart(pos);
-            int Size = Mathf.RoundToInt(voxChunkSize / voxBlockResolution) + 1;
+            int Size = Mathf.RoundToInt(VoxelGlobals.voxChunkSize / VoxelGlobals.voxBlockResolution) + 1;
             return newVox;
         }
 
@@ -1676,7 +1539,9 @@ namespace TT_VoxelTerrain
         /// </summary>
         internal bool RejectDamageEvent(ManDamage.DamageInfo arg, bool DealActualDamage)
         {
-            PendingBleedBrush.Add(arg);
+            if (!PendingBleedBrush.Any())
+                ManVoxelTerrain.ProcessBrushPendingEvent.Subscribe(Remote_FixedUpdateBrush);
+            PendingBleedBrush.Enqueue(arg);
             return true;
         }
         private void ProcessDamageEvent_LEGACY(ManDamage.DamageInfo arg, byte Terrain)
@@ -1687,22 +1552,22 @@ namespace TT_VoxelTerrain
             {
                 case ManDamage.DamageType.Cutting:
                 case ManDamage.DamageType.Standard:
-                    Radius = voxBlockResolution * 0.6f + dmg * 0.15f;
+                    Radius = VoxelGlobals.voxBlockResolution * 0.6f + dmg * 0.15f;
                     Strength = -0.01f - dmg * 0.0001f;//- 1f;//.5f;//-0.01f - dmg * 0.0001f;
-                    Radius /= voxBlockResolution;
+                    Radius /= VoxelGlobals.voxBlockResolution;
                     break;
                 case ManDamage.DamageType.Blast:
-                    Radius = voxBlockResolution * 0.7f + dmg * 0.4f;
+                    Radius = VoxelGlobals.voxBlockResolution * 0.7f + dmg * 0.4f;
                     Strength = -0.01f - dmg * 0.001f;//- .5f;//-0.01f - dmg * 0.001f;
-                    Radius /= voxBlockResolution;
+                    Radius /= VoxelGlobals.voxBlockResolution;
                     break;
                 case ManDamage.DamageType.Impact:
-                    Radius = voxBlockResolution * 0.5f + dmg * 0.25f;
+                    Radius = VoxelGlobals.voxBlockResolution * 0.5f + dmg * 0.25f;
                     Strength = -0.01f - dmg * 0.0001f;//-.5f;//-0.01f - dmg * 0.0001f;
                     if (arg.Source is Tank tank)
-                        Radius = Mathf.Min(Radius / voxBlockResolution, ManVoxelTerrain.MaxTechImpactRadius);
+                        Radius = Mathf.Min(Radius / VoxelGlobals.voxBlockResolution, ManVoxelTerrain.MaxTechImpactRadius);
                     else
-                        Radius /= voxBlockResolution;
+                        Radius /= VoxelGlobals.voxBlockResolution;
                     break;
                 default:
                     return;
@@ -1721,40 +1586,37 @@ namespace TT_VoxelTerrain
                 {
                     case ManDamage.DamageType.Cutting:
                     case ManDamage.DamageType.Standard:
-                        Radius = voxBlockResolution * 0.6f + dmg * 0.15f;
+                        Radius = VoxelGlobals.voxBlockResolution * 0.6f + dmg * 0.15f;
                         Strength = -0.01f - dmg * 0.0001f;//- 1f;//.5f;//-0.01f - dmg * 0.0001f;
-                        Radius /= voxBlockResolution;
+                        Radius /= VoxelGlobals.voxBlockResolution;
                         break;
                     case ManDamage.DamageType.Blast:
-                        Radius = voxBlockResolution * 0.7f + dmg * 0.4f;
+                        Radius = VoxelGlobals.voxBlockResolution * 0.7f + dmg * 0.4f;
                         Strength = -0.01f - dmg * 0.001f;//- .5f;//-0.01f - dmg * 0.001f;
-                        Radius /= voxBlockResolution;
+                        Radius /= VoxelGlobals.voxBlockResolution;
                         break;
                     case ManDamage.DamageType.Impact:
-                        Radius = voxBlockResolution * 0.5f + dmg * 0.25f;
+                        Radius = VoxelGlobals.voxBlockResolution * 0.5f + dmg * 0.25f;
                         Strength = -0.01f - dmg * 0.0001f;//-.5f;//-0.01f - dmg * 0.0001f;
                         if (arg.Source is Tank tank)
-                            Radius = Mathf.Min(Radius / voxBlockResolution, ManVoxelTerrain.MaxTechImpactRadius);
+                            Radius = Mathf.Min(Radius / VoxelGlobals.voxBlockResolution, ManVoxelTerrain.MaxTechImpactRadius);
                         else
-                            Radius /= voxBlockResolution;
+                            Radius /= VoxelGlobals.voxBlockResolution;
                         break;
                     default:
                         return;
                 }
                 //ImpactPrefab(0)?.Spawn(Singleton.dynamicContainer, arg.HitPosition, Quaternion.Euler(arg.DamageDirection));
                 //TT_VoxelTerrain.Class1.SendVoxBrush(new TT_VoxelTerrain.Class1.VoxBrushMessage(arg.HitPosition, Radius, Strength, Terrain));
-                SphereDeltaVoxTerrain(arg.HitPosition, Radius, Strength, -arg.DamageDirection, Terrain);
                 if (arg.SourceTeamID == ManPlayer.inst.PlayerTeam)
                 {
                     if (ManVoxelTerrain.AllowPlayerDamageTerraform)
-                    {
-                    }
+                        SphereDeltaVoxTerrain(arg.HitPosition, Radius, Strength, -arg.DamageDirection, Terrain);
                 }
                 else if (Tank.IsEnemy(ManPlayer.inst.PlayerTeam, arg.SourceTeamID))
                 {
                     if (ManVoxelTerrain.AllowEnemyDamageTerraform)
-                    {
-                    }
+                        SphereDeltaVoxTerrain(arg.HitPosition, Radius, Strength, -arg.DamageDirection, Terrain);
                 }
             }
             else
@@ -1836,6 +1698,30 @@ namespace TT_VoxelTerrain
                 return new IntVector3(xMin + CurrentExtents.x, yMin + CurrentExtents.y, zMin + CurrentExtents.z);
             }
 
+            static CloudPair[,,] CopyTempBufferFromCorner(int Extents, int Corner, CloudPair[,,] Source)
+            {
+                CloudPair[,,] Buffer;
+                if (BufferStack.Any())
+                    Buffer = BufferStack.Pop();
+                else
+                    Buffer = new CloudPair[Extents, Extents, Extents];
+                int xMin = (Corner % 2) * Extents;
+                int yMin = ((Corner / 2) % 2) * Extents;
+                int zMin = ((Corner / 4) % 2) * Extents;
+                for (int j = 0; j < Extents; j++)
+                    for (int k = 0; k < Extents; k++)
+                        for (int i = 0; i < Extents; i++)
+                            Buffer[i, j, k] = Source[i + xMin, j + yMin, k + zMin];
+                return Buffer;
+            }
+
+            /// <summary>
+            /// CREATES GARBAGE
+            /// </summary>
+            /// <param name="Extents"></param>
+            /// <param name="Corner"></param>
+            /// <param name="Source"></param>
+            /// <returns></returns>
             static CloudPair[,,] CopyBufferFromCorner(int Extents, int Corner, CloudPair[,,] Source)
             {
                 var Buffer = new CloudPair[Extents, Extents, Extents];
@@ -1867,6 +1753,7 @@ namespace TT_VoxelTerrain
                 return false;
             }
 
+            private static Stack<CloudPair[,,]> BufferStack = new Stack<CloudPair[,,]>();
             static void Split(ref List<byte> Out, CloudPair[,,] Buffer, int Extents)
             {
                 if (SplitCondition(Buffer))
@@ -1876,8 +1763,9 @@ namespace TT_VoxelTerrain
                     for (int i = 0; i < 8; i++)
                     {
                         var nExtents = Extents / 2;
-                        var nBuffer = CopyBufferFromCorner(nExtents, i, Buffer);
+                        var nBuffer = CopyTempBufferFromCorner(nExtents, i, Buffer);
                         Split(ref Out, nBuffer, nExtents);
+                        BufferStack.Push(nBuffer);
                     }
                     return;
                 }
@@ -1905,6 +1793,12 @@ namespace TT_VoxelTerrain
                 CurrentStep += 2;
             }
 
+            /// <summary>
+            /// CREATES GARBAGE
+            /// </summary>
+            /// <param name="buffer"></param>
+            /// <param name="ArraySize"></param>
+            /// <returns></returns>
             public static byte[] GetByteArrayFromBuffer(CloudPair[,,] buffer, int ArraySize)
             {
                 var bytes = new List<byte>();
