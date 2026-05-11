@@ -1425,7 +1425,8 @@ namespace TT_VoxelTerrain
                 {
                     ManVoxelTerrain.MiningFXLastTime = Time.time + 0.25f;
                     if (Change < 0 && ManVoxelTerrain.biomeMineEffects.TryGetValue(Terrain, out var type))
-                        SpawnHelper.SpawnResourceNodeExplosion(SceneOrigin + LocalPos, type.ST, type.Biome);
+                        SpawnHelper.SpawnResourceNodeExplosion(
+                            SpawnHelper.SceneryTypeToFirstSceneryName[type.ST],SceneOrigin + LocalPos);
                 }
             }
             return Result;
